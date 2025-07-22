@@ -21,7 +21,7 @@ import com.fasterxml.jackson.core.JsonFactory
 import com.fasterxml.jackson.core.JsonGenerator
 import java.nio.file.*
 import java.util.concurrent.Callable
-import java.util.regex.Pattern
+// Removed regex import - using Commons Lang3 StringUtils instead
 import groovy.transform.Field
 
 @Command(name = "find-ref-svelte", mixinStandardHelpOptions = true, version = "1.0.0",
@@ -258,7 +258,7 @@ class SvelteAnalyzer implements Callable<Integer> {
             if (infoResult.exitCode == 0) {
                 String[] lines = infoResult.output.split("\n")
                 if (lines.length > 0) {
-                    String[] parts = lines[0].split("\\|")
+                    String[] parts = StringUtils.split(lines[0], "|")
                     if (parts.length >= 4) {
                         analysis.commitHash = parts[0]
                         analysis.commitMessage = parts[1]
@@ -888,15 +888,47 @@ class SvelteAnalyzer implements Callable<Integer> {
             specificity += StringUtils.countMatches(selector, "[") * 10
             specificity += StringUtils.countMatches(selector, ":") * 10
             
-            // Count elements (weight: 1)
-            String[] parts = selector.split("[\\s>+~]")
+            // Calculate CSS specificity using StringUtils methods instead of regex
+            // Split on common CSS combinator characters
+            List<String> parts = []
+            String current = ""
+            for (int i = 0; i < selector.length(); i++) {
+                char c = selector.charAt(i)
+                if (c == ' ' || c == '>' || c == '+' || c == '~') {
+                    if (current.trim()) {
+                        parts.add(current.trim())
+                        current = ""
+                    }
+                } else {
+                    current += c
+                }
+            }
+            if (current.trim()) {
+                parts.add(current.trim())
+            }
             for (String part : parts) {
-                if (part.trim() && !part.contains(".") && !part.contains("#") && !part.contains("[")) {
+                if (part.trim() && !StringUtils.contains(part, ".") && !StringUtils.contains(part, "#") && !StringUtils.contains(part, "[")) {
                     specificity += 1
                 }
             }
             
             return specificity
+        }
+        
+        // Helper function to extract selector name without regex
+        private String extractSelectorName(String selector) {
+            // Find first occurrence of CSS combinator characters
+            char[] stopChars = [' ', ':', '>', '+', '~', '.', '['] as char[]
+            
+            int stopIndex = selector.length()
+            for (char stopChar : stopChars) {
+                int index = StringUtils.indexOf(selector, stopChar as String)
+                if (index != -1 && index < stopIndex) {
+                    stopIndex = index
+                }
+            }
+            
+            return selector.substring(0, stopIndex)
         }
 
         private Map<String, Object> calculateStatistics(AnalysisResult result) {
@@ -923,51 +955,379 @@ class SvelteAnalyzer implements Callable<Integer> {
             List<JavaScriptFunction> functions = []
             String scriptContent = script.content
             
-            // Function declaration patterns
-            def patterns = [
-                /function\s+(\w+)\s*\([^)]*\)/,  // function name()
-                /const\s+(\w+)\s*=\s*\([^)]*\)\s*=>/,  // const name = () =>
-                /let\s+(\w+)\s*=\s*\([^)]*\)\s*=>/,    // let name = () =>
-                /(\w+):\s*\([^)]*\)\s*=>/,             // name: () =>
-                /(\w+)\s*\([^)]*\)\s*\{/,               // name() { (method)
-                /async\s+function\s+(\w+)/,            // async function name
-                /async\s+(\w+)\s*\(/                   // async name(
-            ]
+            // Enhanced function detection using Commons Lang3 StringUtils - more readable than regex
+            // Parse different function declaration patterns systematically
             
-            patterns.eachWithIndex { pattern, index ->
-                def matcher = scriptContent =~ pattern
-                while (matcher.find()) {
-                    String funcName = matcher.group(1)
+            // 1. Regular function declarations: function name()
+            findFunctionPattern(scriptContent, script, functions, "function ", "(", "function")
+            
+            // 2. Const arrow functions: const name = () =>
+            findConstArrowFunctions(scriptContent, script, functions)
+            
+            // 3. Let arrow functions: let name = () =>
+            findLetArrowFunctions(scriptContent, script, functions)
+            
+            // 4. Object method declarations: name: () =>
+            findObjectMethods(scriptContent, script, functions)
+            
+            // 5. Simple method declarations: name() {
+            findSimpleMethods(scriptContent, script, functions)
+            
+            // 6. Async function declarations
+            findAsyncFunctions(scriptContent, script, functions)
+            
+            return functions
+        }
+        
+        private void findFunctionPattern(String content, Map script, List<JavaScriptFunction> functions, String prefix, String suffix, String type) {
+            int searchStart = 0
+            while (true) {
+                int funcPos = StringUtils.indexOf(content, prefix, searchStart)
+                if (funcPos == -1) break
+                
+                int nameStart = funcPos + prefix.length()
+                while (nameStart < content.length() && Character.isWhitespace(content.charAt(nameStart))) {
+                    nameStart++
+                }
+                
+                int nameEnd = nameStart
+                while (nameEnd < content.length() && (Character.isLetterOrDigit(content.charAt(nameEnd)) || content.charAt(nameEnd) == '_' || content.charAt(nameEnd) == '$')) {
+                    nameEnd++
+                }
+                
+                if (nameEnd > nameStart) {
+                    int suffixPos = StringUtils.indexOf(content, suffix, nameEnd)
+                    if (suffixPos != -1 && suffixPos - nameEnd < 10) { // Reasonable distance
+                        String funcName = content.substring(nameStart, nameEnd)
+                        
+                        // Skip if already found
+                        if (functions.any { it.name == funcName }) {
+                            searchStart = nameEnd
+                            continue
+                        }
+                        
+                        JavaScriptFunction func = new JavaScriptFunction()
+                        func.name = funcName
+                        func.type = type
+                        
+                        // Check if async
+                        String beforeFunc = content.substring(Math.max(0, funcPos - 10), funcPos)
+                        func.isAsync = StringUtils.contains(beforeFunc, "async")
+                        
+                        // Check if exported
+                        String beforeMatch = content.substring(Math.max(0, funcPos - 20), funcPos)
+                        func.isExported = StringUtils.contains(beforeMatch, "export")
+                        
+                        // Get line position
+                        def pos = tracker.getLineColumn(script.startOffset + funcPos)
+                        func.declarationLine = pos.line
+                        func.declarationColumn = pos.column
+                        
+                        functions.add(func)
+                    }
+                }
+                
+                searchStart = nameEnd > searchStart ? nameEnd : searchStart + 1
+            }
+        }
+        
+        private void findConstArrowFunctions(String content, Map script, List<JavaScriptFunction> functions) {
+            int searchStart = 0
+            while (true) {
+                int constPos = StringUtils.indexOf(content, "const ", searchStart)
+                if (constPos == -1) break
+                
+                int nameStart = constPos + 6
+                while (nameStart < content.length() && Character.isWhitespace(content.charAt(nameStart))) {
+                    nameStart++
+                }
+                
+                int nameEnd = nameStart
+                while (nameEnd < content.length() && (Character.isLetterOrDigit(content.charAt(nameEnd)) || content.charAt(nameEnd) == '_' || content.charAt(nameEnd) == '$')) {
+                    nameEnd++
+                }
+                
+                if (nameEnd > nameStart) {
+                    // Look for = () => pattern
+                    int equalPos = StringUtils.indexOf(content, "=", nameEnd)
+                    if (equalPos != -1 && equalPos - nameEnd < 10) {
+                        int arrowStart = StringUtils.indexOf(content, "=>", equalPos)
+                        if (arrowStart != -1 && arrowStart - equalPos < 20) {
+                            String funcName = content.substring(nameStart, nameEnd)
+                            
+                            // Skip if already found
+                            if (functions.any { it.name == funcName }) {
+                                searchStart = nameEnd
+                                continue
+                            }
+                            
+                            JavaScriptFunction func = new JavaScriptFunction()
+                            func.name = funcName
+                            func.type = "arrow"
+                            
+                            // Check if async
+                            String beforeFunc = content.substring(Math.max(0, constPos - 10), constPos)
+                            func.isAsync = StringUtils.contains(beforeFunc, "async")
+                            
+                            // Check if exported
+                            String beforeMatch = content.substring(Math.max(0, constPos - 20), constPos)
+                            func.isExported = StringUtils.contains(beforeMatch, "export")
+                            
+                            // Get line position
+                            def pos = tracker.getLineColumn(script.startOffset + constPos)
+                            func.declarationLine = pos.line
+                            func.declarationColumn = pos.column
+                            
+                            functions.add(func)
+                        }
+                    }
+                }
+                
+                searchStart = nameEnd > searchStart ? nameEnd : searchStart + 1
+            }
+        }
+        
+        private void findLetArrowFunctions(String content, Map script, List<JavaScriptFunction> functions) {
+            int searchStart = 0
+            while (true) {
+                int letPos = StringUtils.indexOf(content, "let ", searchStart)
+                if (letPos == -1) break
+                
+                int nameStart = letPos + 4
+                while (nameStart < content.length() && Character.isWhitespace(content.charAt(nameStart))) {
+                    nameStart++
+                }
+                
+                int nameEnd = nameStart
+                while (nameEnd < content.length() && (Character.isLetterOrDigit(content.charAt(nameEnd)) || content.charAt(nameEnd) == '_' || content.charAt(nameEnd) == '$')) {
+                    nameEnd++
+                }
+                
+                if (nameEnd > nameStart) {
+                    // Look for = () => pattern
+                    int equalPos = StringUtils.indexOf(content, "=", nameEnd)
+                    if (equalPos != -1 && equalPos - nameEnd < 10) {
+                        int arrowStart = StringUtils.indexOf(content, "=>", equalPos)
+                        if (arrowStart != -1 && arrowStart - equalPos < 20) {
+                            String funcName = content.substring(nameStart, nameEnd)
+                            
+                            // Skip if already found
+                            if (functions.any { it.name == funcName }) {
+                                searchStart = nameEnd
+                                continue
+                            }
+                            
+                            JavaScriptFunction func = new JavaScriptFunction()
+                            func.name = funcName
+                            func.type = "arrow"
+                            
+                            // Check if async
+                            String beforeFunc = content.substring(Math.max(0, letPos - 10), letPos)
+                            func.isAsync = StringUtils.contains(beforeFunc, "async")
+                            
+                            // Check if exported
+                            String beforeMatch = content.substring(Math.max(0, letPos - 20), letPos)
+                            func.isExported = StringUtils.contains(beforeMatch, "export")
+                            
+                            // Get line position
+                            def pos = tracker.getLineColumn(script.startOffset + letPos)
+                            func.declarationLine = pos.line
+                            func.declarationColumn = pos.column
+                            
+                            functions.add(func)
+                        }
+                    }
+                }
+                
+                searchStart = nameEnd > searchStart ? nameEnd : searchStart + 1
+            }
+        }
+        
+        private void findObjectMethods(String content, Map script, List<JavaScriptFunction> functions) {
+            // Find patterns like: methodName: () =>
+            int searchStart = 0
+            while (true) {
+                int colonPos = StringUtils.indexOf(content, ":", searchStart)
+                if (colonPos == -1) break
+                
+                // Look backwards for method name
+                int nameStart = colonPos - 1
+                while (nameStart >= 0 && Character.isWhitespace(content.charAt(nameStart))) {
+                    nameStart--
+                }
+                
+                int nameEnd = nameStart + 1
+                while (nameStart >= 0 && (Character.isLetterOrDigit(content.charAt(nameStart)) || content.charAt(nameStart) == '_' || content.charAt(nameStart) == '$')) {
+                    nameStart--
+                }
+                nameStart++
+                
+                if (nameEnd > nameStart) {
+                    // Look for () => after colon
+                    int arrowStart = StringUtils.indexOf(content, "=>", colonPos)
+                    if (arrowStart != -1 && arrowStart - colonPos < 20) {
+                        String funcName = content.substring(nameStart, nameEnd)
+                        
+                        // Skip if already found
+                        if (functions.any { it.name == funcName }) {
+                            searchStart = colonPos + 1
+                            continue
+                        }
+                        
+                        JavaScriptFunction func = new JavaScriptFunction()
+                        func.name = funcName
+                        func.type = "method"
+                        
+                        // Get line position
+                        def pos = tracker.getLineColumn(script.startOffset + nameStart)
+                        func.declarationLine = pos.line
+                        func.declarationColumn = pos.column
+                        
+                        functions.add(func)
+                    }
+                }
+                
+                searchStart = colonPos + 1
+            }
+        }
+        
+        private void findSimpleMethods(String content, Map script, List<JavaScriptFunction> functions) {
+            // Find patterns like: methodName() {
+            int searchStart = 0
+            while (true) {
+                int bracePos = StringUtils.indexOf(content, ") {", searchStart)
+                if (bracePos == -1) break
+                
+                // Look backwards for method name
+                int parenPos = StringUtils.lastIndexOf(content, "(", bracePos)
+                if (parenPos == -1) {
+                    searchStart = bracePos + 1
+                    continue
+                }
+                
+                int nameEnd = parenPos
+                while (nameEnd > 0 && Character.isWhitespace(content.charAt(nameEnd - 1))) {
+                    nameEnd--
+                }
+                
+                int nameStart = nameEnd - 1
+                while (nameStart >= 0 && (Character.isLetterOrDigit(content.charAt(nameStart)) || content.charAt(nameStart) == '_' || content.charAt(nameStart) == '$')) {
+                    nameStart--
+                }
+                nameStart++
+                
+                if (nameEnd > nameStart) {
+                    String funcName = content.substring(nameStart, nameEnd)
                     
-                    // Skip if already found this function
-                    if (functions.any { it.name == funcName }) continue
+                    // Skip if already found
+                    if (functions.any { it.name == funcName }) {
+                        searchStart = bracePos + 1
+                        continue
+                    }
                     
                     JavaScriptFunction func = new JavaScriptFunction()
                     func.name = funcName
-                    
-                    // Determine function type
-                    String fullMatch = matcher.group(0)
-                    if (fullMatch.contains("async")) func.isAsync = true
-                    if (fullMatch.contains("=>")) func.type = "arrow"
-                    else if (fullMatch.contains("function")) func.type = "function"
-                    else if (fullMatch.contains(":")) func.type = "method"
-                    else func.type = "function"
-                    
-                    // Check if exported
-                    int matchStart = matcher.start()
-                    String beforeMatch = scriptContent.substring(Math.max(0, matchStart - 20), matchStart)
-                    func.isExported = beforeMatch.contains("export")
+                    func.type = "method"
                     
                     // Get line position
-                    def pos = tracker.getLineColumn(script.startOffset + matchStart)
+                    def pos = tracker.getLineColumn(script.startOffset + nameStart)
                     func.declarationLine = pos.line
                     func.declarationColumn = pos.column
                     
                     functions.add(func)
                 }
+                
+                searchStart = bracePos + 1
             }
-            
-            return functions
+        }
+        
+        private void findAsyncFunctions(String content, Map script, List<JavaScriptFunction> functions) {
+            int searchStart = 0
+            while (true) {
+                int asyncPos = StringUtils.indexOf(content, "async ", searchStart)
+                if (asyncPos == -1) break
+                
+                int afterAsync = asyncPos + 6
+                while (afterAsync < content.length() && Character.isWhitespace(content.charAt(afterAsync))) {
+                    afterAsync++
+                }
+                
+                // Check if it's "async function"
+                if (StringUtils.startsWith(content.substring(afterAsync), "function")) {
+                    int nameStart = afterAsync + 8
+                    while (nameStart < content.length() && Character.isWhitespace(content.charAt(nameStart))) {
+                        nameStart++
+                    }
+                    
+                    int nameEnd = nameStart
+                    while (nameEnd < content.length() && (Character.isLetterOrDigit(content.charAt(nameEnd)) || content.charAt(nameEnd) == '_' || content.charAt(nameEnd) == '$')) {
+                        nameEnd++
+                    }
+                    
+                    if (nameEnd > nameStart) {
+                        String funcName = content.substring(nameStart, nameEnd)
+                        
+                        // Skip if already found
+                        if (functions.any { it.name == funcName }) {
+                            searchStart = nameEnd
+                            continue
+                        }
+                        
+                        JavaScriptFunction func = new JavaScriptFunction()
+                        func.name = funcName
+                        func.type = "function"
+                        func.isAsync = true
+                        
+                        // Check if exported
+                        String beforeMatch = content.substring(Math.max(0, asyncPos - 20), asyncPos)
+                        func.isExported = StringUtils.contains(beforeMatch, "export")
+                        
+                        // Get line position
+                        def pos = tracker.getLineColumn(script.startOffset + asyncPos)
+                        func.declarationLine = pos.line
+                        func.declarationColumn = pos.column
+                        
+                        functions.add(func)
+                    }
+                } else {
+                    // Check for async arrow function: async name(
+                    int nameEnd = afterAsync
+                    while (nameEnd < content.length() && (Character.isLetterOrDigit(content.charAt(nameEnd)) || content.charAt(nameEnd) == '_' || content.charAt(nameEnd) == '$')) {
+                        nameEnd++
+                    }
+                    
+                    if (nameEnd > afterAsync) {
+                        int parenPos = StringUtils.indexOf(content, "(", nameEnd)
+                        if (parenPos != -1 && parenPos - nameEnd < 5) {
+                            String funcName = content.substring(afterAsync, nameEnd)
+                            
+                            // Skip if already found
+                            if (functions.any { it.name == funcName }) {
+                                searchStart = nameEnd
+                                continue
+                            }
+                            
+                            JavaScriptFunction func = new JavaScriptFunction()
+                            func.name = funcName
+                            func.type = "function"
+                            func.isAsync = true
+                            
+                            // Check if exported
+                            String beforeMatch = content.substring(Math.max(0, asyncPos - 20), asyncPos)
+                            func.isExported = StringUtils.contains(beforeMatch, "export")
+                            
+                            // Get line position
+                            def pos = tracker.getLineColumn(script.startOffset + asyncPos)
+                            func.declarationLine = pos.line
+                            func.declarationColumn = pos.column
+                            
+                            functions.add(func)
+                        }
+                    }
+                }
+                
+                searchStart = asyncPos + 6
+            }
         }
         
         private void findJavaScriptUsage(List<JavaScriptFunction> functions, String content) {
@@ -1052,21 +1412,49 @@ class SvelteAnalyzer implements Callable<Integer> {
         private List<ComponentUsage> parseComponentUsage(String content) {
             List<ComponentUsage> usages = []
             
-            // Find component tags in markup (capitalized tags)
-            def componentPattern = ~/<([A-Z]\w*)[^>]*>/
-            def matcher = content =~ componentPattern
-            
-            while (matcher.find()) {
-                ComponentUsage usage = new ComponentUsage()
-                usage.componentName = matcher.group(1)
-                usage.tagName = matcher.group(1)
+            // Find component tags in markup (capitalized tags) using StringUtils instead of regex
+            int searchStart = 0
+            while (true) {
+                int openBracket = StringUtils.indexOf(content, "<", searchStart)
+                if (openBracket == -1) break
                 
-                def pos = tracker.getLineColumn(matcher.start())
-                usage.line = pos.line
-                usage.column = pos.column
-                usage.context = extractContext(content, matcher.start())
+                // Check if next character is uppercase (component tag)
+                int tagStart = openBracket + 1
+                if (tagStart >= content.length()) break
                 
-                usages.add(usage)
+                char firstChar = content.charAt(tagStart)
+                if (!Character.isUpperCase(firstChar)) {
+                    searchStart = openBracket + 1
+                    continue
+                }
+                
+                // Find the end of the tag name
+                int tagEnd = tagStart
+                while (tagEnd < content.length() && 
+                       (Character.isLetterOrDigit(content.charAt(tagEnd)) || content.charAt(tagEnd) == '_')) {
+                    tagEnd++
+                }
+                
+                if (tagEnd > tagStart) {
+                    // Find the closing > of the opening tag
+                    int closingBracket = StringUtils.indexOf(content, ">", tagEnd)
+                    if (closingBracket != -1) {
+                        String componentName = content.substring(tagStart, tagEnd)
+                        
+                        ComponentUsage usage = new ComponentUsage()
+                        usage.componentName = componentName
+                        usage.tagName = componentName
+                        
+                        def pos = tracker.getLineColumn(openBracket)
+                        usage.line = pos.line
+                        usage.column = pos.column
+                        usage.context = extractContext(content, openBracket)
+                        
+                        usages.add(usage)
+                    }
+                }
+                
+                searchStart = openBracket + 1
             }
             
             return usages
@@ -1179,7 +1567,7 @@ class SvelteAnalyzer implements Callable<Integer> {
                                     if (sel.contains("[") && !sel.startsWith("#") && !sel.startsWith(".")) {
                                         // Element with attribute selector like "select[disabled]"
                                         cssSelector.type = "element"
-                                        cssSelector.name = sel.split("\\[")[0]
+                                        cssSelector.name = StringUtils.substringBefore(sel, "[")
                                         
                                         // Mark attribute selectors as used (they're typically dynamic)
                                         CSSUsage usage = new CSSUsage()
@@ -1192,16 +1580,16 @@ class SvelteAnalyzer implements Callable<Integer> {
                                         
                                     } else if (sel.startsWith(".")) {
                                         cssSelector.type = "class"
-                                        cssSelector.name = sel.substring(1).split("[\\s:>+~\\[]")[0]
+                                        cssSelector.name = extractSelectorName(sel.substring(1))
                                     } else if (sel.startsWith("#")) {
                                         cssSelector.type = "id"  
-                                        cssSelector.name = sel.substring(1).split("[\\s:>+~\\[]")[0]
+                                        cssSelector.name = extractSelectorName(sel.substring(1))
                                     } else if (sel.contains("[")) {
                                         cssSelector.type = "attribute"
                                         cssSelector.name = StringUtils.substringBetween(sel, "[", "]")
                                     } else {
                                         cssSelector.type = "element"
-                                        cssSelector.name = sel.split("[\\s:>+~\\.]")[0]
+                                        cssSelector.name = extractSelectorName(sel)
                                     }
                                     
                                     selectors.add(cssSelector)
@@ -1327,8 +1715,8 @@ class SvelteAnalyzer implements Callable<Integer> {
                 // Check for direct usage in class value
                 boolean foundUsage = false
                 
-                // 1. Standard space-separated classes
-                String[] classes = classValue.split("\\s+")
+                // Split classes by whitespace using StringUtils
+                String[] classes = StringUtils.split(classValue)
                 if (classes.contains(className)) {
                     foundUsage = true
                 }
@@ -1355,7 +1743,7 @@ class SvelteAnalyzer implements Callable<Integer> {
                     
                     // Pattern C: Base class with dynamic modifier like base.{variable}
                     if (className.contains(".")) {
-                        String[] parts = className.split("\\.", 2)
+                        String[] parts = StringUtils.split(className, ".")
                         String baseClass = parts[0]
                         if (classValue.contains(baseClass + ".{")) {
                             foundUsage = true
@@ -1365,7 +1753,7 @@ class SvelteAnalyzer implements Callable<Integer> {
                     // Pattern D: Compound class pattern like "base-class {variable}" creating .base-class.modifier
                     if (className.contains(".") && classValue.trim().contains(" {")) {
                         // Extract compound class parts: .strength-fill.weak -> ["strength-fill", "weak"]
-                        String[] compoundParts = className.split("\\.", 2)
+                        String[] compoundParts = StringUtils.split(className, ".")
                         if (compoundParts.length == 2) {
                             String baseClass = compoundParts[0]
                             String modifierClass = compoundParts[1]
@@ -1436,7 +1824,7 @@ class SvelteAnalyzer implements Callable<Integer> {
                 
                 // For compound classes like .requirement.met, also search for the modifier part
                 if (className.contains(".")) {
-                    String[] parts = className.split("\\.", 2)
+                    String[] parts = StringUtils.split(className, ".")
                     String modifierClass = parts[1]
                     directiveSearchTerm = "class:${modifierClass}="
                 }
@@ -1567,7 +1955,7 @@ class SvelteAnalyzer implements Callable<Integer> {
         private void findDescendantUsage(CSSSelector selector, String markup, int baseOffset) {
             // Parse descendant selector like ".chat-position-bottom-left .chat-header"
             String selectorText = selector.name.trim()
-            String[] parts = selectorText.split("\\s+")
+            String[] parts = StringUtils.split(selectorText)
             
             if (parts.length < 2) return // Not a valid descendant selector
             
@@ -1649,7 +2037,7 @@ class SvelteAnalyzer implements Callable<Integer> {
                 }
                 
                 String classValue = markup.substring(classPos + pattern.length(), quoteEnd)
-                String[] classes = classValue.split("\\s+")
+                String[] classes = StringUtils.split(classValue)
                 
                 for (String cls : classes) {
                     if (cls.equals(className) || 
@@ -2201,7 +2589,17 @@ class SvelteAnalyzer implements Callable<Integer> {
             output.append("-".repeat(30) + "\n")
             comparison.differences.each { key, value ->
                 String sign = value > 0 ? "+" : ""
-                String label = key.replace("Change", "").replaceAll(/([A-Z])/, / $1/).toLowerCase().trim()
+                String label = StringUtils.replace(key, "Change", "")
+                // Convert camelCase to space-separated words using StringUtils 
+                StringBuilder result = new StringBuilder()
+                for (int i = 0; i < label.length(); i++) {
+                    char c = label.charAt(i)
+                    if (Character.isUpperCase(c) && i > 0) {
+                        result.append(" ")
+                    }
+                    result.append(Character.toLowerCase(c))
+                }
+                label = result.toString().trim()
                 label = label.substring(0, 1).toUpperCase() + label.substring(1)
                 output.append("- ${label}: ${sign}${value}\n")
             }
