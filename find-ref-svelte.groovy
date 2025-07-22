@@ -1014,49 +1014,18 @@ class SvelteAnalyzer implements Callable<Integer> {
                         classValue.contains("`${className}`")) {
                         foundUsage = true
                     }
-                    
-                    // Check for template literal patterns like `theme-${variable}`
-                    String[] classParts = className.split("-")
-                    if (classParts.length > 1) {
-                        String classPrefix = classParts[0]
-                        String classSuffix = classParts[1..-1].join("-")
-                        
-                        // Look for patterns like `prefix-${variable}` or '${prefix}-suffix'
-                        if (classValue.contains("`${classPrefix}-") || 
-                            classValue.contains("'${classPrefix}-") ||
-                            classValue.contains("\"${classPrefix}-") ||
-                            classValue.contains("-${classSuffix}")) {
-                            foundUsage = true
-                        }
-                    }
                 }
                 
                 // 3. Template literals and string concatenation patterns
                 if (!foundUsage) {
                     // Match patterns like: 'base-class ' + condition ? 'class1' : 'class2'
                     // Or: `base-class ${condition ? 'class1' : 'class2'}`
-                    // Or: {'card-' + status}
                     if (classValue.contains(className)) {
                         // Check if it's within quotes (indicating it's a class name, not a variable)
                         String quotedClassName = "'${className}'"
                         String doubleQuotedClassName = "\"${className}\""
                         if (classValue.contains(quotedClassName) || classValue.contains(doubleQuotedClassName)) {
                             foundUsage = true
-                        }
-                        
-                        // Check for string concatenation patterns like 'card-' + variable
-                        String[] classParts = className.split("-")
-                        if (classParts.length > 1) {
-                            String classPrefix = classParts[0]
-                            String classSuffix = classParts[1..-1].join("-")
-                            
-                            // Look for patterns like 'prefix-' + variable where the result would be our className
-                            if (classValue.contains("'${classPrefix}-'") || 
-                                classValue.contains("\"${classPrefix}-\"") ||
-                                classValue.contains("'${classPrefix}_'") ||
-                                classValue.contains("\"${classPrefix}_\"")) {
-                                foundUsage = true
-                            }
                         }
                     }
                 }
