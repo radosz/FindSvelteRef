@@ -1,6 +1,6 @@
 # Find-Ref-Svelte 🔍
 
-A comprehensive Svelte/SvelteKit file analyzer that provides detailed insights into CSS usage, component references, imports, and code statistics.
+A comprehensive Svelte/SvelteKit file analyzer and refactoring tool that provides detailed insights into CSS usage, dead code detection, unused component analysis, imports, and code statistics.
 
 ![Groovy](https://img.shields.io/badge/Groovy-4298B8?style=for-the-badge&logo=Apache%20Groovy&logoColor=white)
 ![Svelte](https://img.shields.io/badge/Svelte-4A4A55?style=for-the-badge&logo=svelte&logoColor=FF3E00)
@@ -8,14 +8,24 @@ A comprehensive Svelte/SvelteKit file analyzer that provides detailed insights i
 
 ## 🚀 Features
 
+### Core Analysis
 - **CSS Analysis**: Deep analysis of style blocks, selectors, and CSS overrides
+- **Dead Code Detection**: Identify unused JavaScript/TypeScript functions and variables
+- **Unused Component Analysis**: Find imported components that are never used
 - **Reference Tracking**: Track variable usage, imports, and component references
 - **Import Analysis**: Analyze ES6 imports and their usage patterns
+
+### Advanced Capabilities
 - **CSS Override Detection**: Identify CSS property conflicts and specificity issues
-- **Unused CSS Detection**: Find unused CSS classes and selectors
+- **Dynamic CSS Pattern Detection**: Smart detection avoids false positives for patterns like `toast-{variable}`
+- **Svelte Binding Support**: Detect usage in Svelte's reactive bindings `{functionName}`
 - **Git Integration**: Analyze specific commits and compare changes between commits
 - **Multiple Output Formats**: Text, JSON, and CSV output support
-- **SvelteKit Compatible**: Properly handles SvelteKit project structure
+- **Focused Filtering**: Target specific types of issues for focused refactoring
+
+### Refactoring Support
+- **Actionable Recommendations**: Get specific suggestions for code cleanup
+- **Comprehensive Reports**: All-in-one refactoring analysis with prioritized suggestions
 - **Performance Statistics**: Comprehensive metrics and statistics
 
 ## 📦 Installation
@@ -44,7 +54,7 @@ sudo ln -s $(pwd)/find-ref-svelte.groovy /usr/local/bin/find-ref-svelte
 
 ## 🛠️ Usage
 
-### Basic Usage
+### Basic Analysis
 ```bash
 # Analyze a SvelteKit project
 find-ref-svelte ./my-svelte-project
@@ -54,6 +64,21 @@ find-ref-svelte -v ./my-svelte-project
 
 # Analyze specific file
 find-ref-svelte ./src/routes/+page.svelte
+```
+
+### Focused Refactoring Analysis
+```bash
+# Focus on CSS issues only
+find-ref-svelte --filter-css-issues ./project
+
+# Find dead code (unused functions/variables)
+find-ref-svelte --filter-dead-code ./project
+
+# Find unused component imports
+find-ref-svelte --filter-unused-components ./project
+
+# Comprehensive refactoring report
+find-ref-svelte --filter-all-issues ./project
 ```
 
 ### Output Formats
@@ -77,63 +102,86 @@ find-ref-svelte --git-commit abc123 ./project
 find-ref-svelte --compare-commits abc123,def456 ./project
 ```
 
-### Advanced Options
-```bash
-# Custom file extensions
-find-ref-svelte --extensions .svelte,.vue ./project
-
-# Non-recursive analysis
-find-ref-svelte --recursive=false ./src/components
-```
-
 ## 📊 Sample Output
 
-### CSS Analysis
+### CSS Issues Report
 ```
-Title: /project/src/routes/+page.svelte
+🎨 CSS Issues Found:
+================================================================================
+File: /project/src/routes/+page.svelte
 
-CSS Analysis:
-- <style> declaration count: 1
-- Style blocks:
-  1. [Range 58:1 - 105:9] - Scoped styles
-- Count of imported CSS: 0
+Unused CSS Classes:
+- '.unused-button' declared at style block line 23
+  Properties: background-color, padding, border-radius
+  ❌ Never used in markup
 
-CSS Override Analysis:
-- Property conflicts detected: 3
-  1. 'display' property overridden at [68:1] (specificity: 10)
-     Previous declaration at [60:1]
-  2. 'color' property overridden at [99:1] (specificity: 10)
-     Previous declaration at [78:1]
+CSS Override Issues:
+- 'display' property overridden at [68:1] (specificity: 10)
+  Previous declaration at [60:1]
+  ⚠️  Consider consolidating or using more specific selectors
 
-CSS Selector Usage Analysis:
-Classes:
-- '.container' declared at [58:1] in Block 1
-  Properties: display, flex-direction, align-items
-  Used in HTML at: div [106:145]
-- '.unused-class' declared at [67:1] in Block 1
-  Properties: color, font-size
-  ⚠️  Unused CSS class
+Summary: 1 unused CSS class, 1 override issue
+```
 
-Reference Analysis:
-Variables:
-- 'data' (let) declared at [9:10]
-  Used at: [9:14], [11:13]
+### Dead Code Report
+```
+💀 Dead Code Found:
+================================================================================
+File: /project/src/lib/utils.js
 
-Import Analysis:
-ES6 Imports:
-- 'goto' from '$app/navigation' [imported at 2:3]
-- 'page' from '$app/stores' [imported at 3:3]
+Unused Functions:
+- 'formatDate' declared at line 15
+  ❌ Function is defined but never called
+  💡 Recommendation: Remove if truly unused or export for external use
 
-Statistics:
-- styleBlockCount: 1
-- cssImportCount: 0
-- variableCount: 2
-- importCount: 2
-- cssOverrideCount: 3
-- cssSelectorCount: 5
-- usedCSSSelectors: 4
-- unusedCSSSelectors: 1
-- totalLines: 106
+- 'validateEmail' declared at line 28
+  ❌ Function is defined but never called
+
+Summary: 2 unused functions detected
+```
+
+### Unused Components Report
+```
+🧩 Unused Components Found:
+================================================================================
+File: /project/src/routes/dashboard.svelte
+
+Unused Component Imports:
+- 'LoadingSpinner' imported from '$lib/components/LoadingSpinner.svelte'
+  ❌ Component imported but never used in markup
+  💡 Recommendation: Remove import or use the component
+
+- 'ErrorBoundary' imported from '$lib/components/ErrorBoundary.svelte'
+  ❌ Component imported but never used
+
+Summary: 2 unused component imports
+```
+
+### Comprehensive Refactoring Report
+```
+🔧 Comprehensive Refactoring Analysis:
+================================================================================
+
+Priority Refactoring Opportunities:
+
+🎨 CSS Issues (Priority: Medium)
+- 3 unused CSS classes across 2 files
+- 1 CSS override conflict
+
+💀 Dead Code (Priority: High)
+- 5 unused functions across 3 files
+- 2 unused variables
+
+🧩 Unused Components (Priority: Medium)
+- 2 unused component imports
+
+💡 Refactoring Recommendations:
+1. Remove 5 unused functions to reduce bundle size
+2. Clean up 2 unused component imports
+3. Consolidate CSS overrides in dashboard.svelte
+4. Review unused CSS classes for removal
+
+Estimated cleanup impact: ~15% reduction in bundle size
 ```
 
 ## 📋 Command Line Options
@@ -146,6 +194,10 @@ Statistics:
 | `-r, --recursive` | Recursive directory analysis | true |
 | `-v, --verbose` | Verbose output | false |
 | `--extensions` | File extensions to analyze | .svelte |
+| `--filter-css-issues` | Show only CSS-related issues | - |
+| `--filter-dead-code` | Show only dead code (unused functions/variables) | - |
+| `--filter-unused-components` | Show only unused component imports | - |
+| `--filter-all-issues` | Comprehensive refactoring report | - |
 | `--git-commit` | Analyze specific git commit | - |
 | `--compare-commits` | Compare two commits (hash1,hash2) | - |
 | `--git-working-dir` | Git repository directory | current |
@@ -154,29 +206,51 @@ Statistics:
 
 ## 🎯 Use Cases
 
-### 1. CSS Cleanup
-Identify unused CSS classes and selectors to reduce bundle size:
+### 1. Pre-Refactoring Analysis
+Get a comprehensive overview before starting refactoring:
 ```bash
-find-ref-svelte -f json ./src | jq '.[] | select(.statistics.unusedCSSSelectors > 0)'
+find-ref-svelte --filter-all-issues ./src
 ```
 
-### 2. Refactoring Analysis
-Before refactoring, understand component dependencies:
+### 2. CSS Cleanup
+Identify unused CSS for bundle size optimization:
 ```bash
-find-ref-svelte -v ./src/lib/components
+find-ref-svelte --filter-css-issues ./src
 ```
 
-### 3. Performance Auditing
-Find components with high CSS override counts:
+### 3. Dead Code Elimination
+Find and remove unused functions to improve performance:
 ```bash
-find-ref-svelte -f csv ./src > analysis.csv
-# Import CSV into spreadsheet for analysis
+find-ref-svelte --filter-dead-code ./src
 ```
 
-### 4. Git Workflow Integration
-Compare changes between commits:
+### 4. Component Import Cleanup
+Clean up unused component imports:
 ```bash
-find-ref-svelte --compare-commits HEAD~1,HEAD ./src
+find-ref-svelte --filter-unused-components ./src
+```
+
+### 5. CI/CD Integration
+Add to your build pipeline for automated refactoring insights:
+```bash
+# In your GitHub Actions or GitLab CI
+find-ref-svelte --filter-all-issues -f json ./src > refactoring-report.json
+```
+
+## 🧪 Testing
+
+The tool includes a comprehensive test suite:
+
+```bash
+# Run all tests
+groovy run-tests.groovy
+
+# The test suite covers:
+# ✅ CSS issue detection and dynamic pattern handling
+# ✅ Dead code detection (unused functions/variables)
+# ✅ Unused component import detection
+# ✅ Multiple output formats (JSON, CSV)
+# ✅ Error handling and edge cases
 ```
 
 ## 🔧 Configuration
@@ -214,6 +288,9 @@ The tool automatically excludes common build directories:
 4. Push to branch: `git push origin feature/new-feature`
 5. Submit a Pull Request
 
+## 📝 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 

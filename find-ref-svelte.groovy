@@ -55,6 +55,15 @@ class SvelteAnalyzer implements Callable<Integer> {
     @Option(names = ["--filter-css-issues"], description = "Show only CSS-related issues that need fixing")
     boolean filterCssIssues = false
 
+    @Option(names = ["--filter-dead-code"], description = "Show only unused JavaScript/TypeScript functions and variables")
+    boolean filterDeadCode = false
+
+    @Option(names = ["--filter-unused-components"], description = "Show only unused Svelte components")
+    boolean filterUnusedComponents = false
+
+    @Option(names = ["--filter-all-issues"], description = "Show all refactoring issues (CSS + dead code + unused components)")
+    boolean filterAllIssues = false
+
     // Data structures for analysis results
     class AnalysisResult {
         String filePath
@@ -64,6 +73,9 @@ class SvelteAnalyzer implements Callable<Integer> {
         List<ImportStatement> imports = []
         List<CSSOverride> cssOverrides = []
         List<CSSSelector> cssSelectors = []
+        List<JavaScriptFunction> jsFunctions = []
+        List<ComponentUsage> componentUsages = []
+        List<ComponentImport> componentImports = []
         Map<String, Object> statistics = [:]
     }
 
@@ -126,6 +138,31 @@ class SvelteAnalyzer implements Callable<Integer> {
     class CSSUsage extends Usage {
         String element
         String attribute // class, id, etc
+    }
+
+    class JavaScriptFunction {
+        String name
+        String type // function, arrow, method, getter, setter
+        int declarationLine, declarationColumn
+        List<String> parameters = []
+        List<Usage> usages = []
+        boolean isExported = false
+        boolean isAsync = false
+        String scope // global, class, local
+    }
+
+    class ComponentUsage extends Usage {
+        String componentName
+        String tagName
+        Map<String, String> props = [:]
+    }
+
+    class ComponentImport {
+        String componentName
+        String filePath
+        int line, column
+        boolean isUsed = false
+        List<ComponentUsage> usages = []
     }
     class GitCommitAnalysis {
         String commitHash
@@ -310,6 +347,21 @@ class SvelteAnalyzer implements Callable<Integer> {
 
             // Analyze CSS overrides
             result.cssOverrides = analyzeCSSOverrides(result.styleBlocks)
+
+            // Parse JavaScript functions from script sections
+            scriptSections.each { script ->
+                result.jsFunctions.addAll(parseJavaScriptFunctions(script))
+            }
+            
+            // Find function usage throughout the file
+            findJavaScriptUsage(result.jsFunctions, content)
+            
+            // Parse component imports and usage
+            result.componentImports = parseComponentImports(result.imports)
+            result.componentUsages = parseComponentUsage(content)
+            
+            // Link component imports with their usage
+            linkComponentUsage(result.componentImports, result.componentUsages)
 
             // Calculate statistics
             result.statistics = calculateStatistics(result)
@@ -855,8 +907,144 @@ class SvelteAnalyzer implements Callable<Integer> {
                 cssSelectorCount: result.cssSelectors.size(),
                 usedCSSSelectors: result.cssSelectors.count { !it.htmlUsages.isEmpty() },
                 unusedCSSSelectors: result.cssSelectors.count { it.htmlUsages.isEmpty() },
+                jsFunctionCount: result.jsFunctions.size(),
+                usedJSFunctions: result.jsFunctions.count { !it.usages.isEmpty() },
+                unusedJSFunctions: result.jsFunctions.count { it.usages.isEmpty() },
+                componentImportCount: result.componentImports.size(),
+                usedComponents: result.componentImports.count { it.isUsed },
+                unusedComponents: result.componentImports.count { !it.isUsed },
                 totalLines: StringUtils.countMatches(content, "\n") + 1
             ]
+        }
+        
+        private List<JavaScriptFunction> parseJavaScriptFunctions(Map script) {
+            List<JavaScriptFunction> functions = []
+            String scriptContent = script.content
+            
+            // Function declaration patterns
+            def patterns = [
+                /function\s+(\w+)\s*\([^)]*\)/,  // function name()
+                /const\s+(\w+)\s*=\s*\([^)]*\)\s*=>/,  // const name = () =>
+                /let\s+(\w+)\s*=\s*\([^)]*\)\s*=>/,    // let name = () =>
+                /(\w+):\s*\([^)]*\)\s*=>/,             // name: () =>
+                /(\w+)\s*\([^)]*\)\s*\{/,               // name() { (method)
+                /async\s+function\s+(\w+)/,            // async function name
+                /async\s+(\w+)\s*\(/                   // async name(
+            ]
+            
+            patterns.eachWithIndex { pattern, index ->
+                def matcher = scriptContent =~ pattern
+                while (matcher.find()) {
+                    String funcName = matcher.group(1)
+                    
+                    // Skip if already found this function
+                    if (functions.any { it.name == funcName }) continue
+                    
+                    JavaScriptFunction func = new JavaScriptFunction()
+                    func.name = funcName
+                    
+                    // Determine function type
+                    String fullMatch = matcher.group(0)
+                    if (fullMatch.contains("async")) func.isAsync = true
+                    if (fullMatch.contains("=>")) func.type = "arrow"
+                    else if (fullMatch.contains("function")) func.type = "function"
+                    else if (fullMatch.contains(":")) func.type = "method"
+                    else func.type = "function"
+                    
+                    // Check if exported
+                    int matchStart = matcher.start()
+                    String beforeMatch = scriptContent.substring(Math.max(0, matchStart - 20), matchStart)
+                    func.isExported = beforeMatch.contains("export")
+                    
+                    // Get line position
+                    def pos = tracker.getLineColumn(script.startOffset + matchStart)
+                    func.declarationLine = pos.line
+                    func.declarationColumn = pos.column
+                    
+                    functions.add(func)
+                }
+            }
+            
+            return functions
+        }
+        
+        private void findJavaScriptUsage(List<JavaScriptFunction> functions, String content) {
+            functions.each { func ->
+                // Look for function calls: functionName( or {functionName}
+                def patterns = [
+                    ~/${func.name}\s*\(/,     // function calls: name()
+                    ~/\{${func.name}\}/       // Svelte bindings: {name}
+                ]
+                
+                patterns.each { pattern ->
+                    def matcher = content =~ pattern
+                    while (matcher.find()) {
+                        int usagePos = matcher.start()
+                        
+                        // Skip the declaration itself
+                        def pos = tracker.getLineColumn(usagePos)
+                        if (pos.line == func.declarationLine) continue
+                        
+                        Usage usage = new Usage()
+                        usage.line = pos.line
+                        usage.column = pos.column
+                        usage.context = extractContext(content, usagePos)
+                        func.usages.add(usage)
+                    }
+                }
+            }
+        }
+        
+        private List<ComponentImport> parseComponentImports(List<ImportStatement> imports) {
+            List<ComponentImport> componentImports = []
+            
+            imports.each { importStmt ->
+                if (importStmt.module.endsWith('.svelte')) {
+                    // For .svelte imports, the first symbol is usually the component name
+                    if (importStmt.symbols && !importStmt.symbols.isEmpty()) {
+                        ComponentImport compImport = new ComponentImport()
+                        compImport.componentName = importStmt.symbols[0]
+                        compImport.filePath = importStmt.module
+                        compImport.line = importStmt.line
+                        compImport.column = importStmt.column
+                        componentImports.add(compImport)
+                    }
+                }
+            }
+            
+            return componentImports
+        }
+        
+        private List<ComponentUsage> parseComponentUsage(String content) {
+            List<ComponentUsage> usages = []
+            
+            // Find component tags in markup (capitalized tags)
+            def componentPattern = ~/<([A-Z]\w*)[^>]*>/
+            def matcher = content =~ componentPattern
+            
+            while (matcher.find()) {
+                ComponentUsage usage = new ComponentUsage()
+                usage.componentName = matcher.group(1)
+                usage.tagName = matcher.group(1)
+                
+                def pos = tracker.getLineColumn(matcher.start())
+                usage.line = pos.line
+                usage.column = pos.column
+                usage.context = extractContext(content, matcher.start())
+                
+                usages.add(usage)
+            }
+            
+            return usages
+        }
+        
+        private void linkComponentUsage(List<ComponentImport> imports, List<ComponentUsage> usages) {
+            imports.each { compImport ->
+                compImport.usages = usages.findAll { usage -> 
+                    usage.componentName == compImport.componentName 
+                }
+                compImport.isUsed = !compImport.usages.isEmpty()
+            }
         }
         private List<CSSSelector> parseCSSSelectors(List<StyleBlock> styleBlocks) {
             List<CSSSelector> selectors = []
@@ -1809,6 +1997,97 @@ class SvelteAnalyzer implements Callable<Integer> {
             return csv.toString()
         }
         
+        private String formatDeadCodeOnly(AnalysisResult result, String format) {
+            switch (format.toLowerCase()) {
+                case "json": return formatDeadCodeAsJSON(result)
+                case "csv": return formatDeadCodeAsCSV(result)
+                default: return formatDeadCodeAsText(result)
+            }
+        }
+        
+        private String formatUnusedComponentsOnly(AnalysisResult result, String format) {
+            switch (format.toLowerCase()) {
+                case "json": return formatUnusedComponentsAsJSON(result)
+                case "csv": return formatUnusedComponentsAsCSV(result)
+                default: return formatUnusedComponentsAsText(result)
+            }
+        }
+        
+        private String formatAllIssues(AnalysisResult result, String format) {
+            switch (format.toLowerCase()) {
+                case "json": return formatAllIssuesAsJSON(result)
+                case "csv": return formatAllIssuesAsCSV(result)
+                default: return formatAllIssuesAsText(result)
+            }
+        }
+        
+        private String formatDeadCodeAsText(AnalysisResult result) {
+            StringBuilder output = new StringBuilder()
+            boolean hasIssues = false
+            
+            def unusedFunctions = result.jsFunctions.findAll { func -> func.usages.isEmpty() && !func.isExported }
+            if (unusedFunctions) {
+                hasIssues = true
+                output.append("💀 Dead Code in: ${result.filePath}\n\n⚠️ Unused Functions:\n")
+                unusedFunctions.each { func ->
+                    output.append("- '${func.name}()' declared at [${func.declarationLine}:${func.declarationColumn}]\n  ❌ Never called\n")
+                }
+            }
+            
+            def unusedVars = result.variables.findAll { variable -> 
+                variable.usages.isEmpty() && variable.type != 'reactive' && !variable.name.startsWith('$')
+            }
+            if (unusedVars) {
+                if (!hasIssues) { output.append("💀 Dead Code in: ${result.filePath}\n\n"); hasIssues = true }
+                output.append("⚠️ Unused Variables:\n")
+                unusedVars.each { variable ->
+                    output.append("- '${variable.name}' declared at [${variable.declarationLine}:${variable.declarationCol}]\n  ❌ Never used\n")
+                }
+            }
+            
+            return hasIssues ? output.toString() : ""
+        }
+        
+        private String formatUnusedComponentsAsText(AnalysisResult result) {
+            def unusedComponents = result.componentImports.findAll { !it.isUsed }
+            if (!unusedComponents) return ""
+            
+            StringBuilder output = new StringBuilder()
+            output.append("🧩 Unused Components in: ${result.filePath}\n\n⚠️ Imported but Never Used:\n")
+            unusedComponents.each { compImport ->
+                output.append("- '${compImport.componentName}' from '${compImport.filePath}'\n  ❌ Remove import\n")
+            }
+            return output.toString()
+        }
+        
+        private String formatAllIssuesAsText(AnalysisResult result) {
+            String css = formatCssIssuesAsText(result)
+            String dead = formatDeadCodeAsText(result)
+            String comp = formatUnusedComponentsAsText(result)
+            
+            if (!css && !dead && !comp) return ""
+            
+            StringBuilder output = new StringBuilder()
+            output.append("🔧 REFACTORING REPORT: ${result.filePath}\n${'=' * 80}\n\n")
+            if (css) output.append(css).append("\n")
+            if (dead) output.append(dead).append("\n")
+            if (comp) output.append(comp).append("\n")
+            
+            int totalIssues = (result.cssSelectors?.count { it.htmlUsages.isEmpty() } ?: 0) +
+                             (result.jsFunctions?.count { it.usages.isEmpty() && !it.isExported } ?: 0) +
+                             (result.componentImports?.count { !it.isUsed } ?: 0)
+            output.append("📊 SUMMARY: ${totalIssues} refactoring opportunities found\n")
+            
+            return output.toString()
+        }
+        
+        private String formatDeadCodeAsJSON(AnalysisResult result) { return "{}" }
+        private String formatUnusedComponentsAsJSON(AnalysisResult result) { return "{}" }
+        private String formatAllIssuesAsJSON(AnalysisResult result) { return "{}" }
+        private String formatDeadCodeAsCSV(AnalysisResult result) { return "" }
+        private String formatUnusedComponentsAsCSV(AnalysisResult result) { return "" }
+        private String formatAllIssuesAsCSV(AnalysisResult result) { return "" }
+        
         String formatGitCommitAnalysis(GitCommitAnalysis commitAnalysis, String format) {
             switch (format.toLowerCase()) {
                 case "json":
@@ -2021,6 +2300,12 @@ class SvelteAnalyzer implements Callable<Integer> {
                     String formattedResult
                     if (filterCssIssues) {
                         formattedResult = formatter.formatCssIssuesOnly(result, format)
+                    } else if (filterDeadCode) {
+                        formattedResult = formatter.formatDeadCodeOnly(result, format)
+                    } else if (filterUnusedComponents) {
+                        formattedResult = formatter.formatUnusedComponentsOnly(result, format)
+                    } else if (filterAllIssues) {
+                        formattedResult = formatter.formatAllIssues(result, format)
                     } else {
                         formattedResult = formatter.formatAnalysisResult(result, format)
                     }
