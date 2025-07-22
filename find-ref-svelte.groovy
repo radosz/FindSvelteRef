@@ -52,6 +52,9 @@ class SvelteAnalyzer implements Callable<Integer> {
     @Option(names = ["--git-working-dir"], description = "Git repository directory (default: current directory)")
     String gitWorkingDir = "."
 
+    @Option(names = ["--filter-css-issues"], description = "Show only CSS-related issues that need fixing")
+    boolean filterCssIssues = false
+
     // Data structures for analysis results
     class AnalysisResult {
         String filePath
@@ -1007,24 +1010,33 @@ class SvelteAnalyzer implements Callable<Integer> {
                     foundUsage = true
                 }
                 
-                // 2. Dynamic expressions: {condition ? 'class1' : 'class2'}
+                // 2. Dynamic pattern detection - COMPLETE REWRITE
                 if (!foundUsage && classValue.contains("{")) {
-                    if (classValue.contains("'${className}'") || 
-                        classValue.contains("\"${className}\"") ||
-                        classValue.contains("`${className}`")) {
-                        foundUsage = true
+                    // Pattern: toast-{variable} should match .toast-success, .toast-error, etc.
+                    if (className.contains("-")) {
+                        String[] parts = className.split("-", 2)
+                        String prefix = parts[0]
+                        if (classValue.contains(prefix + "-{")) {
+                            foundUsage = true
+                        }
+                    }
+                    
+                    // Pattern: base.{variable} should match .base.modifier
+                    if (className.contains(".")) {
+                        String[] parts = className.split("\\.", 2)
+                        String baseClass = parts[0]
+                        if (classValue.contains(baseClass + ".{")) {
+                            foundUsage = true
+                        }
                     }
                 }
                 
-                // 3. Template literals and string concatenation patterns
-                if (!foundUsage) {
-                    // Match patterns like: 'base-class ' + condition ? 'class1' : 'class2'
-                    // Or: `base-class ${condition ? 'class1' : 'class2'}`
-                    if (classValue.contains(className)) {
-                        // Check if it's within quotes (indicating it's a class name, not a variable)
-                        String quotedClassName = "'${className}'"
-                        String doubleQuotedClassName = "\"${className}\""
-                        if (classValue.contains(quotedClassName) || classValue.contains(doubleQuotedClassName)) {
+                // 3. Template literal patterns ${variable}
+                if (!foundUsage && classValue.contains("\${")) {
+                    if (className.contains("-")) {
+                        String[] parts = className.split("-", 2)
+                        String prefix = parts[0]
+                        if (classValue.contains(prefix + "-\${")) {
                             foundUsage = true
                         }
                     }
@@ -1176,6 +1188,17 @@ class SvelteAnalyzer implements Callable<Integer> {
 
     // Output formatter
     class OutputFormatter {
+        
+        String formatCssIssuesOnly(AnalysisResult result, String format) {
+            switch (format.toLowerCase()) {
+                case "json":
+                    return formatCssIssuesAsJSON(result)
+                case "csv":
+                    return formatCssIssuesAsCSV(result)
+                default:
+                    return formatCssIssuesAsText(result)
+            }
+        }
         
         String formatAnalysisResult(AnalysisResult result, String format) {
             switch (format.toLowerCase()) {
@@ -1368,6 +1391,117 @@ class SvelteAnalyzer implements Callable<Integer> {
             
             return csv.toString()
         }
+        
+        private String formatCssIssuesAsText(AnalysisResult result) {
+            StringBuilder output = new StringBuilder()
+            
+            // Only show files with CSS issues
+            boolean hasIssues = false
+            
+            // Check for unused CSS selectors
+            def unusedSelectors = result.cssSelectors.findAll { selector ->
+                !selector.htmlUsages || selector.htmlUsages.isEmpty()
+            }
+            
+            if (unusedSelectors) {
+                hasIssues = true
+                output.append("🔍 CSS Issues in: ${result.filePath}\n\n")
+                
+                output.append("⚠️ Unused CSS Classes/IDs:\n")
+                unusedSelectors.each { selector ->
+                    String prefix = selector.type == "class" ? "." : "#"
+                    output.append("- '${prefix}${selector.name}' declared at [${selector.declarationLine}:${selector.declarationColumn}]\n")
+                    output.append("  ❌ Never used in HTML\n")
+                }
+                output.append("\n")
+            }
+            
+            // Check for CSS overrides/conflicts
+            if (result.cssOverrides) {
+                if (!hasIssues) {
+                    output.append("🔍 CSS Issues in: ${result.filePath}\n\n")
+                    hasIssues = true
+                }
+                
+                output.append("⚠️ CSS Property Conflicts:\n")
+                result.cssOverrides.each { override ->
+                    output.append("- '${override.property}' overridden at [${override.line}:${override.column}]\n")
+                    output.append("  ${override.conflictsWith}\n")
+                }
+                output.append("\n")
+            }
+            
+            // Check for missing CSS imports
+            if (result.styleBlocks.isEmpty() && result.cssImports.isEmpty()) {
+                if (!hasIssues) {
+                    output.append("🔍 CSS Issues in: ${result.filePath}\n\n")
+                    hasIssues = true
+                }
+                
+                output.append("⚠️ No CSS Found:\n")
+                output.append("- No <style> blocks or CSS imports detected\n")
+                output.append("  Consider adding styles or importing CSS\n\n")
+            }
+            
+            return hasIssues ? output.toString() : ""
+        }
+        
+        private String formatCssIssuesAsJSON(AnalysisResult result) {
+            def issues = [:]
+            issues.filePath = result.filePath
+            issues.unusedSelectors = []
+            issues.cssOverrides = []
+            issues.noCSS = false
+            
+            // Unused selectors
+            result.cssSelectors.findAll { !it.htmlUsages || it.htmlUsages.isEmpty() }.each { selector ->
+                issues.unusedSelectors.add([
+                    type: selector.type,
+                    name: selector.name,
+                    line: selector.declarationLine,
+                    column: selector.declarationColumn
+                ])
+            }
+            
+            // CSS overrides
+            if (result.cssOverrides) {
+                issues.cssOverrides = result.cssOverrides
+            }
+            
+            // No CSS
+            if (result.styleBlocks.isEmpty() && result.cssImports.isEmpty()) {
+                issues.noCSS = true
+            }
+            
+            return issues.unusedSelectors || issues.cssOverrides || issues.noCSS ? 
+                new JsonBuilder(issues).toPrettyString() : ""
+        }
+        
+        private String formatCssIssuesAsCSV(AnalysisResult result) {
+            StringBuilder csv = new StringBuilder()
+            boolean hasHeader = false
+            
+            // Unused selectors
+            result.cssSelectors.findAll { !it.htmlUsages || it.htmlUsages.isEmpty() }.each { selector ->
+                if (!hasHeader) {
+                    csv.append("File,IssueType,SelectorType,Name,Line,Column,Details\n")
+                    hasHeader = true
+                }
+                csv.append("${result.filePath},UnusedSelector,${selector.type},${selector.name},${selector.declarationLine},${selector.declarationColumn},Never used in HTML\n")
+            }
+            
+            // CSS overrides
+            result.cssOverrides?.each { override ->
+                if (!hasHeader) {
+                    csv.append("File,IssueType,SelectorType,Name,Line,Column,Details\n")
+                    hasHeader = true
+                }
+                csv.append("${result.filePath},PropertyConflict,property,${override.property},${override.line},${override.column},${override.conflictsWith}\n")
+            }
+            
+            return csv.toString()
+        }
+        
         String formatGitCommitAnalysis(GitCommitAnalysis commitAnalysis, String format) {
             switch (format.toLowerCase()) {
                 case "json":
@@ -1577,8 +1711,16 @@ class SvelteAnalyzer implements Callable<Integer> {
                     SvelteFileParser parser = new SvelteFileParser(content)
                     AnalysisResult result = parser.parseFile(file.absolutePath)
                     
-                    String formattedResult = formatter.formatAnalysisResult(result, format)
-                    allResults.add(formattedResult)
+                    String formattedResult
+                    if (filterCssIssues) {
+                        formattedResult = formatter.formatCssIssuesOnly(result, format)
+                    } else {
+                        formattedResult = formatter.formatAnalysisResult(result, format)
+                    }
+                    
+                    if (formattedResult && !formattedResult.trim().isEmpty()) {
+                        allResults.add(formattedResult)
+                    }
                     
                 } catch (Exception e) {
                     System.err.println "Error processing ${file.absolutePath}: ${e.message}"
