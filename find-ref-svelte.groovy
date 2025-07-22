@@ -970,10 +970,18 @@ class SvelteAnalyzer implements Callable<Integer> {
         
         private void findJavaScriptUsage(List<JavaScriptFunction> functions, String content) {
             functions.each { func ->
-                // Look for function calls: functionName( or {functionName}
+                // Look for function calls and event listener usage
                 def patterns = [
-                    ~/${func.name}\s*\(/,     // function calls: name()
-                    ~/\{${func.name}\}/       // Svelte bindings: {name}
+                    ~/${func.name}\s*\(/,                              // function calls: name()
+                    ~/\{${func.name}\}/,                               // Svelte bindings: {name}
+                    ~/addEventListener\s*\(\s*['"]\w+['"]\s*,\s*${func.name}\s*\)/, // addEventListener('event', functionName)
+                    ~/removeEventListener\s*\(\s*['"]\w+['"]\s*,\s*${func.name}\s*\)/, // removeEventListener('event', functionName)
+                    ~/on:\w+\s*=\s*\{${func.name}\}/,                 // Svelte event handlers: on:click={functionName}
+                    ~/bind:this\s*=\s*\{${func.name}\}/,              // Svelte bind: bind:this={functionName}
+                    ~/\$:\s*${func.name}\s*\(/,                       // Reactive statements: $: functionName()
+                    ~/\[\s*${func.name}\s*\]/,                        // Array references: [functionName]
+                    ~/\{\s*${func.name}\s*\}/,                        // Object references: {functionName}
+                    ~/${func.name}\s*[,\)]/                           // Function as parameter: func(functionName, ...)
                 ]
                 
                 patterns.each { pattern ->
