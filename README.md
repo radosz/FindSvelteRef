@@ -22,14 +22,14 @@ A comprehensive Svelte/SvelteKit file analyzer that provides detailed insights i
 
 ### Quick Install
 ```bash
-curl -fsSL https://raw.githubusercontent.com/your-repo/find-ref-svelte/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/radosz/FindSvelteRef/main/install.sh | bash
 ```
 
 ### Manual Installation
 1. Clone the repository:
 ```bash
-git clone https://github.com/your-repo/find-ref-svelte.git
-cd find-ref-svelte
+git clone git@github.com:radosz/FindSvelteRef.git
+cd FindSvelteRef
 ```
 
 2. Make the script executable:
