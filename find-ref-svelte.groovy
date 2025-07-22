@@ -865,44 +865,142 @@ class SvelteAnalyzer implements Callable<Integer> {
                 String[] lines = block.content.split("\n")
                 String currentSelector = ""
                 int selectorStartLine = 0
+                String accumulatedSelector = ""
+                int keyframesBraceLevel = 0
+                int mediaBraceLevel = 0
                 
                 for (int i = 0; i < lines.length; i++) {
                     String line = lines[i].trim()
                     
+                    // Track keyframes
+                    if (line.contains("@keyframes")) {
+                        keyframesBraceLevel = 1 // We expect the opening brace
+                        continue
+                    }
+                    
+                    // Track media queries
+                    if (line.contains("@media")) {
+                        mediaBraceLevel = 1 // We expect the opening brace
+                        continue
+                    }
+                    
+                    // Count braces to track nesting levels
+                    if (keyframesBraceLevel > 0 || mediaBraceLevel > 0) {
+                        int openBraces = StringUtils.countMatches(line, "{")
+                        int closeBraces = StringUtils.countMatches(line, "}")
+                        
+                        if (keyframesBraceLevel > 0) {
+                            keyframesBraceLevel += openBraces - closeBraces
+                            if (keyframesBraceLevel <= 0) {
+                                keyframesBraceLevel = 0
+                            }
+                        }
+                        
+                        if (mediaBraceLevel > 0) {
+                            mediaBraceLevel += openBraces - closeBraces
+                            if (mediaBraceLevel <= 0) {
+                                mediaBraceLevel = 0
+                            }
+                        }
+                        
+                        // Skip processing selectors inside keyframes or media queries
+                        if (keyframesBraceLevel > 0 || mediaBraceLevel > 0) {
+                            continue
+                        }
+                    }
+                    
                     if (line.contains("{")) {
                         // Selector declaration line
-                        currentSelector = StringUtils.substringBefore(line, "{").trim()
-                        selectorStartLine = block.startLine + i
+                        if (accumulatedSelector) {
+                            // We have accumulated a multi-line selector
+                            currentSelector = (accumulatedSelector + " " + StringUtils.substringBefore(line, "{")).trim()
+                        } else {
+                            currentSelector = StringUtils.substringBefore(line, "{").trim()
+                            selectorStartLine = block.startLine + i
+                        }
                         
                         // Parse individual selectors (comma-separated)
                         String[] individualSelectors = currentSelector.split(",")
                         individualSelectors.each { sel ->
                             sel = sel.trim()
                             if (sel) {
-                                CSSSelector cssSelector = new CSSSelector()
-                                cssSelector.selector = sel
-                                cssSelector.declarationLine = selectorStartLine
-                                cssSelector.declarationColumn = line.indexOf(sel) + 1
-                                cssSelector.sourceBlock = "Block ${blockIndex + 1}"
-                                
-                                // Determine selector type and extract name
-                                if (sel.startsWith(".")) {
-                                    cssSelector.type = "class"
-                                    cssSelector.name = sel.substring(1).split("[\\s:>+~\\[]")[0]
-                                } else if (sel.startsWith("#")) {
-                                    cssSelector.type = "id"  
-                                    cssSelector.name = sel.substring(1).split("[\\s:>+~\\[]")[0]
-                                } else if (sel.contains("[")) {
-                                    cssSelector.type = "attribute"
-                                    cssSelector.name = StringUtils.substringBetween(sel, "[", "]")
+                                // Check if this is a descendant selector (contains spaces)
+                                if (sel.contains(" ") && !sel.contains(":") && !sel.contains(">") && !sel.contains("+") && !sel.contains("~")) {
+                                    // This is a descendant selector like ".parent .child"
+                                    CSSSelector cssSelector = new CSSSelector()
+                                    cssSelector.selector = sel
+                                    cssSelector.declarationLine = selectorStartLine
+                                    cssSelector.declarationColumn = line.indexOf(sel) + 1
+                                    cssSelector.sourceBlock = "Block ${blockIndex + 1}"
+                                    cssSelector.type = "descendant"
+                                    cssSelector.name = sel // Keep the full selector for descendant type
+                                    
+                                    // Mark descendant selectors as used by default (to avoid false positives)
+                                    CSSUsage usage = new CSSUsage()
+                                    usage.line = selectorStartLine
+                                    usage.column = 1
+                                    usage.context = "descendant selector auto-detected as used"
+                                    usage.element = "descendant"
+                                    usage.attribute = "descendant"
+                                    cssSelector.htmlUsages.add(usage)
+                                    
+                                    selectors.add(cssSelector)
                                 } else {
-                                    cssSelector.type = "element"
-                                    cssSelector.name = sel.split("[\\s:>+~\\.]")[0]
+                                    // Regular selector
+                                    CSSSelector cssSelector = new CSSSelector()
+                                    cssSelector.selector = sel
+                                    cssSelector.declarationLine = selectorStartLine
+                                    cssSelector.declarationColumn = line.indexOf(sel) + 1
+                                    cssSelector.sourceBlock = "Block ${blockIndex + 1}"
+                                    
+                                    // Determine selector type and extract name
+                                    if (sel.contains("[") && !sel.startsWith("#") && !sel.startsWith(".")) {
+                                        // Element with attribute selector like "select[disabled]"
+                                        cssSelector.type = "element"
+                                        cssSelector.name = sel.split("\\[")[0]
+                                        
+                                        // Mark attribute selectors as used (they're typically dynamic)
+                                        CSSUsage usage = new CSSUsage()
+                                        usage.line = selectorStartLine
+                                        usage.column = 1
+                                        usage.context = "attribute selector auto-detected as used"
+                                        usage.element = cssSelector.name
+                                        usage.attribute = "attribute"
+                                        cssSelector.htmlUsages.add(usage)
+                                        
+                                    } else if (sel.startsWith(".")) {
+                                        cssSelector.type = "class"
+                                        cssSelector.name = sel.substring(1).split("[\\s:>+~\\[]")[0]
+                                    } else if (sel.startsWith("#")) {
+                                        cssSelector.type = "id"  
+                                        cssSelector.name = sel.substring(1).split("[\\s:>+~\\[]")[0]
+                                    } else if (sel.contains("[")) {
+                                        cssSelector.type = "attribute"
+                                        cssSelector.name = StringUtils.substringBetween(sel, "[", "]")
+                                    } else {
+                                        cssSelector.type = "element"
+                                        cssSelector.name = sel.split("[\\s:>+~\\.]")[0]
+                                    }
+                                    
+                                    selectors.add(cssSelector)
                                 }
-                                
-                                selectors.add(cssSelector)
                             }
                         }
+                        
+                        // Reset accumulated selector
+                        accumulatedSelector = ""
+                        
+                    } else if (line.endsWith(",")) {
+                        // Multi-line selector - accumulate
+                        if (!accumulatedSelector) {
+                            selectorStartLine = block.startLine + i
+                        }
+                        accumulatedSelector += (accumulatedSelector ? " " : "") + line.substring(0, line.length() - 1).trim()
+                        
+                    } else if (accumulatedSelector && !line.contains(":")) {
+                        // Continue multi-line selector without comma
+                        accumulatedSelector += " " + line
+                        
                     } else if (line.contains(":") && !line.startsWith("//") && !line.startsWith("/*") && currentSelector) {
                         // Property line - add to current selector's properties
                         String property = StringUtils.substringBefore(line, ":").trim()
@@ -931,6 +1029,9 @@ class SvelteAnalyzer implements Callable<Integer> {
                         break
                     case "element":
                         findElementUsage(selector, markup, markupStartOffset)
+                        break
+                    case "descendant":
+                        findDescendantUsage(selector, markup, markupStartOffset)
                         break
                 }
             }
@@ -1065,6 +1166,30 @@ class SvelteAnalyzer implements Callable<Integer> {
                             }
                         }
                     }
+                    
+                    // Pattern F: Template literals outside class attributes (for dynamic assignment)
+                    // Example: positionClass = `chat-position-${chatPosition}` creating .chat-position-bottom-left
+                    if (className.contains("-")) {
+                        String[] parts = className.split("-", 2)
+                        String prefix = parts[0]
+                        // Look for template literals in the broader markup
+                        if (markup.contains("`${prefix}-\${") || markup.contains("\"${prefix}-\${") || markup.contains("'${prefix}-\${")) {
+                            foundUsage = true
+                        }
+                    }
+                    
+                    // Pattern G: Variables containing class names used in class attributes
+                    // Example: class="base-class {variableName}" where variableName contains our className
+                    if (className.contains("-")) {
+                        String[] parts = className.split("-", 2)
+                        String prefix = parts[0]
+                        String suffix = parts[1]
+                        
+                        // Look for template literals that create our class name
+                        if (markup.contains("`${prefix}-\${")) {
+                            foundUsage = true
+                        }
+                    }
                 }
                 
                 if (foundUsage) {
@@ -1085,7 +1210,16 @@ class SvelteAnalyzer implements Callable<Integer> {
             // Pattern E: Svelte class directive usage class:name={condition}
             searchStart = 0
             while (true) {
-                int directivePos = StringUtils.indexOf(markup, "class:${className}=", searchStart)
+                String directiveSearchTerm = "class:${className}="
+                
+                // For compound classes like .requirement.met, also search for the modifier part
+                if (className.contains(".")) {
+                    String[] parts = className.split("\\.", 2)
+                    String modifierClass = parts[1]
+                    directiveSearchTerm = "class:${modifierClass}="
+                }
+                
+                int directivePos = StringUtils.indexOf(markup, directiveSearchTerm, searchStart)
                 if (directivePos == -1) break
                 
                 CSSUsage usage = new CSSUsage()
@@ -1097,7 +1231,7 @@ class SvelteAnalyzer implements Callable<Integer> {
                 usage.attribute = "class:directive"
                 
                 selector.htmlUsages.add(usage)
-                searchStart = directivePos + className.length() + 7 // +7 for "class:="
+                searchStart = directivePos + directiveSearchTerm.length()
             }
             
             // Also search for class usage in the entire markup (for dynamic patterns outside class attributes)
@@ -1206,6 +1340,136 @@ class SvelteAnalyzer implements Callable<Integer> {
                 selector.htmlUsages.add(usage)
                 searchStart = elementPos + elementName.length() + 1
             }
+        }
+
+        private void findDescendantUsage(CSSSelector selector, String markup, int baseOffset) {
+            // Parse descendant selector like ".chat-position-bottom-left .chat-header"
+            String selectorText = selector.name.trim()
+            String[] parts = selectorText.split("\\s+")
+            
+            if (parts.length < 2) return // Not a valid descendant selector
+            
+            // For now, handle simple case of ".parent .child"
+            String parentSelector = parts[0].trim()
+            String childSelector = parts[1].trim()
+            
+            // Only handle class-based descendant selectors for now
+            if (!parentSelector.startsWith(".") || !childSelector.startsWith(".")) return
+            
+            String parentClass = parentSelector.substring(1)
+            String childClass = childSelector.substring(1)
+            
+            // Find parent elements with parentClass
+            int searchStart = 0
+            while (true) {
+                int parentPos = findClassInMarkup(markup, parentClass, searchStart)
+                if (parentPos == -1) break
+                
+                // Find the parent element's closing tag
+                int parentTagStart = parentPos
+                while (parentTagStart > 0 && markup.charAt(parentTagStart) != '<') {
+                    parentTagStart--
+                }
+                
+                if (parentTagStart == 0) {
+                    searchStart = parentPos + parentClass.length()
+                    continue
+                }
+                
+                // Get the parent element name
+                String parentElement = extractElementName(markup, parentPos)
+                if (parentElement == "unknown") {
+                    searchStart = parentPos + parentClass.length()
+                    continue
+                }
+                
+                // Find the closing tag for this parent element
+                int parentEndPos = findClosingTag(markup, parentElement, parentTagStart)
+                if (parentEndPos == -1) {
+                    searchStart = parentPos + parentClass.length()
+                    continue
+                }
+                
+                // Look for child class within the parent element's content
+                String parentContent = markup.substring(parentTagStart, parentEndPos)
+                if (parentContent.contains("class=\"") && parentContent.contains(childClass)) {
+                    // Check if the child class is actually used in a class attribute
+                    if (hasClassInContent(parentContent, childClass)) {
+                        CSSUsage usage = new CSSUsage()
+                        def pos = tracker.getLineColumn(baseOffset + parentPos)
+                        usage.line = pos.line
+                        usage.column = pos.column
+                        usage.context = extractContext(markup, parentPos)
+                        usage.element = parentElement
+                        usage.attribute = "descendant"
+                        
+                        selector.htmlUsages.add(usage)
+                        break // Found usage, no need to continue searching
+                    }
+                }
+                
+                searchStart = parentPos + parentClass.length()
+            }
+        }
+        
+        private int findClassInMarkup(String markup, String className, int startPos) {
+            String pattern = "class=\""
+            int searchStart = startPos
+            
+            while (true) {
+                int classPos = StringUtils.indexOf(markup, pattern, searchStart)
+                if (classPos == -1) return -1
+                
+                int quoteEnd = StringUtils.indexOf(markup, "\"", classPos + pattern.length())
+                if (quoteEnd == -1) {
+                    searchStart = classPos + pattern.length()
+                    continue
+                }
+                
+                String classValue = markup.substring(classPos + pattern.length(), quoteEnd)
+                String[] classes = classValue.split("\\s+")
+                
+                for (String cls : classes) {
+                    if (cls.equals(className) || 
+                        (cls.contains("{") && cls.contains(className))) { // Handle dynamic classes
+                        return classPos
+                    }
+                }
+                
+                searchStart = quoteEnd + 1
+            }
+        }
+        
+        private boolean hasClassInContent(String content, String className) {
+            return content.contains("class=\"") && content.contains(className)
+        }
+        
+        private int findClosingTag(String markup, String elementName, int startPos) {
+            String openingTag = "<${elementName}"
+            String closingTag = "</${elementName}>"
+            
+            int tagCount = 1
+            int searchPos = startPos + openingTag.length()
+            
+            while (searchPos < markup.length() && tagCount > 0) {
+                int nextOpening = StringUtils.indexOf(markup, openingTag, searchPos)
+                int nextClosing = StringUtils.indexOf(markup, closingTag, searchPos)
+                
+                if (nextClosing == -1) return -1 // No closing tag found
+                
+                if (nextOpening != -1 && nextOpening < nextClosing) {
+                    tagCount++
+                    searchPos = nextOpening + openingTag.length()
+                } else {
+                    tagCount--
+                    if (tagCount == 0) {
+                        return nextClosing + closingTag.length()
+                    }
+                    searchPos = nextClosing + closingTag.length()
+                }
+            }
+            
+            return -1 // No matching closing tag found
         }
 
         private String extractElementName(String markup, int position) {
