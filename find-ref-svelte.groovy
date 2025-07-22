@@ -974,6 +974,7 @@ class SvelteAnalyzer implements Callable<Integer> {
             String className = selector.name
             int searchStart = 0
             
+            // First, check for standard class usage
             while (true) {
                 int classPos = StringUtils.indexOf(markup, "class=", searchStart)
                 if (classPos == -1) break
@@ -996,9 +997,40 @@ class SvelteAnalyzer implements Callable<Integer> {
                 }
                 
                 String classValue = markup.substring(quoteStart + 1, quoteEnd)
-                String[] classes = classValue.split("\\s+")
                 
+                // Check for direct usage in class value
+                boolean foundUsage = false
+                
+                // 1. Standard space-separated classes
+                String[] classes = classValue.split("\\s+")
                 if (classes.contains(className)) {
+                    foundUsage = true
+                }
+                
+                // 2. Dynamic expressions: {condition ? 'class1' : 'class2'}
+                if (!foundUsage && classValue.contains("{")) {
+                    if (classValue.contains("'${className}'") || 
+                        classValue.contains("\"${className}\"") ||
+                        classValue.contains("`${className}`")) {
+                        foundUsage = true
+                    }
+                }
+                
+                // 3. Template literals and string concatenation patterns
+                if (!foundUsage) {
+                    // Match patterns like: 'base-class ' + condition ? 'class1' : 'class2'
+                    // Or: `base-class ${condition ? 'class1' : 'class2'}`
+                    if (classValue.contains(className)) {
+                        // Check if it's within quotes (indicating it's a class name, not a variable)
+                        String quotedClassName = "'${className}'"
+                        String doubleQuotedClassName = "\"${className}\""
+                        if (classValue.contains(quotedClassName) || classValue.contains(doubleQuotedClassName)) {
+                            foundUsage = true
+                        }
+                    }
+                }
+                
+                if (foundUsage) {
                     CSSUsage usage = new CSSUsage()
                     def pos = tracker.getLineColumn(baseOffset + classPos)
                     usage.line = pos.line
@@ -1011,6 +1043,44 @@ class SvelteAnalyzer implements Callable<Integer> {
                 }
                 
                 searchStart = quoteEnd + 1
+            }
+            
+            // Also search for class usage in the entire markup (for dynamic patterns outside class attributes)
+            searchStart = 0
+            while (true) {
+                // Look for quoted class names in JavaScript expressions
+                String quotedClassName = "'${className}'"
+                int usagePos = StringUtils.indexOf(markup, quotedClassName, searchStart)
+                if (usagePos == -1) {
+                    quotedClassName = "\"${className}\""
+                    usagePos = StringUtils.indexOf(markup, quotedClassName, searchStart)
+                }
+                if (usagePos == -1) break
+                
+                // Make sure it's not already counted in a class attribute
+                boolean inClassAttribute = false
+                int checkPos = usagePos
+                while (checkPos > 0 && markup.charAt(checkPos) != '<') {
+                    if (markup.substring(Math.max(0, checkPos - 6), checkPos).contains("class=")) {
+                        inClassAttribute = true
+                        break
+                    }
+                    checkPos--
+                }
+                
+                if (!inClassAttribute) {
+                    CSSUsage usage = new CSSUsage()
+                    def pos = tracker.getLineColumn(baseOffset + usagePos)
+                    usage.line = pos.line
+                    usage.column = pos.column
+                    usage.context = extractContext(markup, usagePos)
+                    usage.element = extractElementName(markup, usagePos)
+                    usage.attribute = "dynamic"
+                    
+                    selector.htmlUsages.add(usage)
+                }
+                
+                searchStart = usagePos + quotedClassName.length()
             }
         }
 
