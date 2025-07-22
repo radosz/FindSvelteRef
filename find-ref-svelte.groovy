@@ -1010,9 +1010,18 @@ class SvelteAnalyzer implements Callable<Integer> {
                     foundUsage = true
                 }
                 
-                // 2. Dynamic pattern detection - COMPLETE REWRITE
+                // 2. Svelte conditional class patterns - ENHANCED DETECTION
                 if (!foundUsage && classValue.contains("{")) {
-                    // Pattern: toast-{variable} should match .toast-success, .toast-error, etc.
+                    
+                    // Pattern A: {condition ? 'class-name' : 'other-class'}
+                    if (classValue.contains("? '${className}'") || 
+                        classValue.contains("? \"${className}\"") ||
+                        classValue.contains(": '${className}'") || 
+                        classValue.contains(": \"${className}\"")) {
+                        foundUsage = true
+                    }
+                    
+                    // Pattern B: Dynamic patterns like toast-{variable} matching .toast-success
                     if (className.contains("-")) {
                         String[] parts = className.split("-", 2)
                         String prefix = parts[0]
@@ -1021,7 +1030,7 @@ class SvelteAnalyzer implements Callable<Integer> {
                         }
                     }
                     
-                    // Pattern: base.{variable} should match .base.modifier
+                    // Pattern C: Base class with dynamic modifier like base.{variable}
                     if (className.contains(".")) {
                         String[] parts = className.split("\\.", 2)
                         String baseClass = parts[0]
@@ -1029,15 +1038,31 @@ class SvelteAnalyzer implements Callable<Integer> {
                             foundUsage = true
                         }
                     }
-                }
-                
-                // 3. Template literal patterns ${variable}
-                if (!foundUsage && classValue.contains("\${")) {
-                    if (className.contains("-")) {
-                        String[] parts = className.split("-", 2)
-                        String prefix = parts[0]
-                        if (classValue.contains(prefix + "-\${")) {
-                            foundUsage = true
+                    
+                    // Pattern D: Compound class pattern like "base-class {variable}" creating .base-class.modifier
+                    if (className.contains(".") && classValue.trim().contains(" {")) {
+                        // Extract compound class parts: .strength-fill.weak -> ["strength-fill", "weak"]
+                        String[] compoundParts = className.split("\\.", 2)
+                        if (compoundParts.length == 2) {
+                            String baseClass = compoundParts[0]
+                            String modifierClass = compoundParts[1]
+                            
+                            // Check if classValue has pattern like "strength-fill {variable}"
+                            // where {variable} could evaluate to the modifier class
+                            if (classValue.contains(baseClass) && classValue.contains("{")) {
+                                foundUsage = true
+                            }
+                        }
+                    }
+                    
+                    // Pattern E: Template literals with ${variable}
+                    if (classValue.contains("\${")) {
+                        if (className.contains("-")) {
+                            String[] parts = className.split("-", 2)
+                            String prefix = parts[0]
+                            if (classValue.contains(prefix + "-\${")) {
+                                foundUsage = true
+                            }
                         }
                     }
                 }
@@ -1055,6 +1080,24 @@ class SvelteAnalyzer implements Callable<Integer> {
                 }
                 
                 searchStart = quoteEnd + 1
+            }
+            
+            // Pattern E: Svelte class directive usage class:name={condition}
+            searchStart = 0
+            while (true) {
+                int directivePos = StringUtils.indexOf(markup, "class:${className}=", searchStart)
+                if (directivePos == -1) break
+                
+                CSSUsage usage = new CSSUsage()
+                def pos = tracker.getLineColumn(baseOffset + directivePos)
+                usage.line = pos.line
+                usage.column = pos.column
+                usage.context = extractContext(markup, directivePos)
+                usage.element = extractElementName(markup, directivePos)
+                usage.attribute = "class:directive"
+                
+                selector.htmlUsages.add(usage)
+                searchStart = directivePos + className.length() + 7 // +7 for "class:="
             }
             
             // Also search for class usage in the entire markup (for dynamic patterns outside class attributes)
