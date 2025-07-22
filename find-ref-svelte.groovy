@@ -1,11 +1,13 @@
 #!/usr/bin/env groovy
 
-@Grab('org.apache.commons:commons-lang3:3.12.0')
-@Grab('commons-io:commons-io:2.11.0')
-@Grab('info.picocli:picocli:4.7.0')
-@Grab('com.fasterxml.jackson.core:jackson-core:2.15.2')
-@Grab('org.apache.commons:commons-csv:1.9.0')
-@Grab('org.slf4j:slf4j-simple:2.0.7')
+@Grapes([
+    @Grab(group='org.apache.commons', module='commons-lang3', version='3.18.0'),
+    @Grab('commons-io:commons-io:2.11.0'),
+    @Grab('info.picocli:picocli:4.7.0'),
+    @Grab('com.fasterxml.jackson.core:jackson-core:2.15.2'),
+    @Grab('org.apache.commons:commons-csv:1.9.0'),
+    @Grab('org.slf4j:slf4j-simple:2.0.7')
+])
 
 import groovy.json.JsonBuilder
 import org.apache.commons.lang3.StringUtils
@@ -970,34 +972,58 @@ class SvelteAnalyzer implements Callable<Integer> {
         
         private void findJavaScriptUsage(List<JavaScriptFunction> functions, String content) {
             functions.each { func ->
-                // Look for function calls and event listener usage
-                def patterns = [
-                    ~/${func.name}\s*\(/,                              // function calls: name()
-                    ~/\{${func.name}\}/,                               // Svelte bindings: {name}
-                    ~/addEventListener\s*\(\s*['"]\w+['"]\s*,\s*${func.name}\s*\)/, // addEventListener('event', functionName)
-                    ~/removeEventListener\s*\(\s*['"]\w+['"]\s*,\s*${func.name}\s*\)/, // removeEventListener('event', functionName)
-                    ~/on:\w+\s*=\s*\{${func.name}\}/,                 // Svelte event handlers: on:click={functionName}
-                    ~/bind:this\s*=\s*\{${func.name}\}/,              // Svelte bind: bind:this={functionName}
-                    ~/\$:\s*${func.name}\s*\(/,                       // Reactive statements: $: functionName()
-                    ~/\[\s*${func.name}\s*\]/,                        // Array references: [functionName]
-                    ~/\{\s*${func.name}\s*\}/,                        // Object references: {functionName}
-                    ~/${func.name}\s*[,\)]/                           // Function as parameter: func(functionName, ...)
+                // Enhanced usage detection using Commons Lang3 for better readability
+                List<String> usagePatterns = [
+                    "${func.name}(",                                  // Direct function calls
+                    "{${func.name}}",                                 // Svelte bindings
+                    "addEventListener(",                              // Event listeners (we'll check if function name follows)
+                    "removeEventListener(",                           // Event listener removal
+                    "on:${func.name}",                               // Svelte direct event handlers  
+                    "\$: ${func.name}",                              // Reactive statements
+                    "[${func.name}]",                                // Array literal references
+                    "{${func.name}}",                                // Object literal references
+                    ", ${func.name})",                               // Function parameters
+                    "(${func.name},",                                // First parameter
+                    " ${func.name} "                                 // General references with spaces
                 ]
                 
-                patterns.each { pattern ->
-                    def matcher = content =~ pattern
-                    while (matcher.find()) {
-                        int usagePos = matcher.start()
+                usagePatterns.each { pattern ->
+                    int searchStart = 0
+                    while (true) {
+                        int usagePos = StringUtils.indexOf(content, pattern, searchStart)
+                        if (usagePos == -1) break
                         
                         // Skip the declaration itself
                         def pos = tracker.getLineColumn(usagePos)
-                        if (pos.line == func.declarationLine) continue
+                        if (pos.line == func.declarationLine) {
+                            searchStart = usagePos + pattern.length()
+                            continue
+                        }
                         
-                        Usage usage = new Usage()
-                        usage.line = pos.line
-                        usage.column = pos.column
-                        usage.context = extractContext(content, usagePos)
-                        func.usages.add(usage)
+                        // Special handling for addEventListener/removeEventListener
+                        if (pattern.contains("addEventListener") || pattern.contains("removeEventListener")) {
+                            // Check if our function name appears after the event type
+                            String afterPattern = content.substring(usagePos + pattern.length())
+                            if (StringUtils.contains(afterPattern, func.name)) {
+                                String eventListenerSection = StringUtils.substring(afterPattern, 0, 100) // Look ahead 100 chars
+                                if (StringUtils.contains(eventListenerSection, func.name)) {
+                                    Usage usage = new Usage()
+                                    usage.line = pos.line
+                                    usage.column = pos.column
+                                    usage.context = extractContext(content, usagePos)
+                                    func.usages.add(usage)
+                                }
+                            }
+                        } else {
+                            // Regular usage
+                            Usage usage = new Usage()
+                            usage.line = pos.line
+                            usage.column = pos.column
+                            usage.context = extractContext(content, usagePos)
+                            func.usages.add(usage)
+                        }
+                        
+                        searchStart = usagePos + pattern.length()
                     }
                 }
             }
