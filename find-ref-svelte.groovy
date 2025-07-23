@@ -2559,9 +2559,12 @@ class SvelteAnalyzer implements Callable<Integer> {
             if (dead) output.append(dead).append("\n")
             if (comp) output.append(comp).append("\n")
             
-            int totalIssues = (result.cssSelectors?.count { it.htmlUsages.isEmpty() } ?: 0) +
+            int totalIssues = (result.cssSelectors?.count { it.htmlUsages.isEmpty() && !it.sourceBlock?.contains("Global") } ?: 0) +
+                             (result.cssOverrides?.size() ?: 0) +
                              (result.jsFunctions?.count { it.usages.isEmpty() && !it.isExported } ?: 0) +
-                             (result.componentImports?.count { !it.isUsed } ?: 0)
+                             (result.variables?.count { it.usages.isEmpty() && it.type != 'reactive' && !it.name.startsWith('$') } ?: 0) +
+                             (result.componentImports?.count { !it.isUsed } ?: 0) +
+                             (result.imports?.count { it.usages.isEmpty() } ?: 0)
             output.append("📊 SUMMARY: ${totalIssues} refactoring opportunities found\n")
             
             return output.toString()
