@@ -1541,7 +1541,7 @@ class SvelteAnalyzer implements Callable<Integer> {
                                     cssSelector.selector = sel
                                     cssSelector.declarationLine = selectorStartLine
                                     cssSelector.declarationColumn = line.indexOf(sel) + 1
-                                    cssSelector.sourceBlock = "Block ${blockIndex + 1}"
+                                    cssSelector.sourceBlock = block.isScoped ? "Scoped Block ${blockIndex + 1}" : "Global Block ${blockIndex + 1}"
                                     cssSelector.type = "descendant"
                                     cssSelector.name = sel // Keep the full selector for descendant type
                                     
@@ -1561,7 +1561,7 @@ class SvelteAnalyzer implements Callable<Integer> {
                                     cssSelector.selector = sel
                                     cssSelector.declarationLine = selectorStartLine
                                     cssSelector.declarationColumn = line.indexOf(sel) + 1
-                                    cssSelector.sourceBlock = "Block ${blockIndex + 1}"
+                                    cssSelector.sourceBlock = block.isScoped ? "Scoped Block ${blockIndex + 1}" : "Global Block ${blockIndex + 1}"
                                     
                                     // Determine selector type and extract name
                                     if (sel.contains("[") && !sel.startsWith("#") && !sel.startsWith(".")) {
@@ -1736,7 +1736,9 @@ class SvelteAnalyzer implements Callable<Integer> {
                     if (className.contains("-")) {
                         String[] parts = className.split("-", 2)
                         String prefix = parts[0]
-                        if (classValue.contains(prefix + "-{")) {
+                        if (classValue.contains(prefix + "-{") || 
+                            markup.contains("'" + prefix + "-' + ") ||
+                            markup.contains("\"" + prefix + "-\" + ")) {
                             foundUsage = true
                         }
                     }
@@ -1885,6 +1887,20 @@ class SvelteAnalyzer implements Callable<Integer> {
 
         private void findIdUsage(CSSSelector selector, String markup, int baseOffset) {
             String idName = selector.name
+            
+            // Skip common global IDs that might be used outside this component
+            if (idName in ["body", "html", "root", "app", "main"] && selector.sourceBlock.contains("Global")) {
+                // Mark as used to avoid false positives
+                CSSUsage usage = new CSSUsage()
+                usage.line = 1
+                usage.column = 1
+                usage.context = "global ID auto-detected as used"
+                usage.element = "global"
+                usage.attribute = "id"
+                selector.htmlUsages.add(usage)
+                return
+            }
+            
             int searchStart = 0
             
             while (true) {
@@ -2315,9 +2331,10 @@ class SvelteAnalyzer implements Callable<Integer> {
             // Only show files with CSS issues
             boolean hasIssues = false
             
-            // Check for unused CSS selectors
+            // Check for unused CSS selectors (skip global styles)
             def unusedSelectors = result.cssSelectors.findAll { selector ->
-                !selector.htmlUsages || selector.htmlUsages.isEmpty()
+                (!selector.htmlUsages || selector.htmlUsages.isEmpty()) && 
+                !selector.sourceBlock.contains("Global")
             }
             
             if (unusedSelectors) {
@@ -2370,8 +2387,11 @@ class SvelteAnalyzer implements Callable<Integer> {
             issues.cssOverrides = []
             issues.noCSS = false
             
-            // Unused selectors
-            result.cssSelectors.findAll { !it.htmlUsages || it.htmlUsages.isEmpty() }.each { selector ->
+            // Unused selectors (skip global styles as they might be used elsewhere)
+            result.cssSelectors.findAll { 
+                (!it.htmlUsages || it.htmlUsages.isEmpty()) && 
+                !it.sourceBlock.contains("Global")
+            }.each { selector ->
                 issues.unusedSelectors.add([
                     type: selector.type,
                     name: selector.name,
@@ -2398,8 +2418,11 @@ class SvelteAnalyzer implements Callable<Integer> {
             StringBuilder csv = new StringBuilder()
             boolean hasHeader = false
             
-            // Unused selectors
-            result.cssSelectors.findAll { !it.htmlUsages || it.htmlUsages.isEmpty() }.each { selector ->
+            // Unused selectors (skip global styles as they might be used elsewhere)
+            result.cssSelectors.findAll { 
+                (!it.htmlUsages || it.htmlUsages.isEmpty()) && 
+                !it.sourceBlock.contains("Global")
+            }.each { selector ->
                 if (!hasHeader) {
                     csv.append("File,IssueType,SelectorType,Name,Line,Column,Details\n")
                     hasHeader = true
