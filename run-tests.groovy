@@ -26,6 +26,12 @@ class SvelteAnalyzerTestSuite {
         testCSVOutput()
         testErrorHandling()
         
+        // NEW TDD Tests for recent fixes
+        testJavaScriptKeywordsFalsePositives()
+        testCSSConflictsSameSelectorOnly()
+        testRecursiveAnalysisAlwaysEnabled()
+        testTypeScriptTypeFalsePositives()
+        
         // Print final results
         printTestSummary()
     }
@@ -127,6 +133,84 @@ class SvelteAnalyzerTestSuite {
         def result = runAnalyzer("test-refactoring.svelte", "--invalid-flag")
         // Should still work (unknown flags are ignored)
         recordTest("Invalid Arguments", true, "Handles invalid arguments gracefully")
+    }
+
+    void testJavaScriptKeywordsFalsePositives() {
+        println "\n🔧 Testing JavaScript Keywords False Positives..."
+        
+        def result = runAnalyzer("test-css-conflicts-and-js-keywords.svelte", "--filter-all-issues")
+        
+        // Should NOT contain if() or catch() as unused functions
+        boolean hasIfFalsePositive = result.output.contains("'if()' declared") && result.output.contains("Never called")
+        boolean hasCatchFalsePositive = result.output.contains("'catch()' declared") && result.output.contains("Never called")
+        boolean hasTryFalsePositive = result.output.contains("'try()' declared") && result.output.contains("Never called")
+        boolean hasWhileFalsePositive = result.output.contains("'while()' declared") && result.output.contains("Never called")
+        
+        // Test passes if NO false positives are found
+        boolean testPassed = !hasIfFalsePositive && !hasCatchFalsePositive && !hasTryFalsePositive && !hasWhileFalsePositive
+        
+        if (hasIfFalsePositive) println "❌ Found false positive for 'if()'"
+        if (hasCatchFalsePositive) println "❌ Found false positive for 'catch()'"
+        if (hasTryFalsePositive) println "❌ Found false positive for 'try()'"
+        if (hasWhileFalsePositive) println "❌ Found false positive for 'while()'"
+        
+        recordTest("JavaScript Keywords", testPassed, testPassed ? "No false positives for if/catch/while etc." : "Still detecting keywords as functions")
+    }
+
+    void testCSSConflictsSameSelectorOnly() {
+        println "\n🎨 Testing CSS Conflicts Same Selector Only..."
+        
+        def result = runAnalyzer("test-css-conflicts-and-js-keywords.svelte", "--filter-all-issues")
+        
+        // Should contain conflict for .container padding (same selector, different values)
+        boolean hasRealConflict = result.output.contains("'padding' overridden")
+        
+        // Should NOT contain conflicts between .user-message and .bot-message (different selectors)
+        boolean hasFalseConflictBackground = result.output.contains("'background' overridden") && 
+                                           result.output.contains("user-message") && 
+                                           result.output.contains("bot-message")
+        
+        // Test passes if real conflict is detected but false conflicts are not
+        boolean testPassed = hasRealConflict && !hasFalseConflictBackground
+        
+        if (!hasRealConflict) println "❌ Real conflict not detected (.container padding)"
+        if (hasFalseConflictBackground) println "❌ False conflict detected between different selectors"
+        
+        recordTest("CSS Conflicts", testPassed, testPassed ? "Only reports conflicts within same selector" : "Still reporting false positives across different selectors")
+    }
+
+    void testRecursiveAnalysisAlwaysEnabled() {
+        println "\n📁 Testing Recursive Analysis Always Enabled..."
+        
+        // Test that analysis works without -r parameter (should be always recursive)
+        def result = runAnalyzer("test-project/", "--filter-all-issues -v")
+        
+        // Should find files in subdirectories without needing -r flag
+        boolean testPassed = result.exitCode == 0 && result.output.contains("Found 2 files to analyze")
+        
+        recordTest("Recursive Analysis", testPassed, testPassed ? "Always enabled, no -r parameter needed" : "Recursive analysis not working")
+    }
+
+    void testTypeScriptTypeFalsePositives() {
+        println "\n🔧 Testing TypeScript Type False Positives..."
+        
+        def result = runAnalyzer("test-typescript-types.svelte", "--filter-all-issues")
+        
+        // Should NOT detect TypeScript type properties as functions
+        boolean hasYFalsePositive = result.output.contains("'y()' declared") && result.output.contains("Never called")
+        boolean hasHeightFalsePositive = result.output.contains("'height()' declared") && result.output.contains("Never called")
+        
+        // Should detect real unused function
+        boolean hasRealUnusedFunction = result.output.contains("'actualUnusedFunction()' declared")
+        
+        // Test passes if real function is detected but type properties are not
+        boolean testPassed = hasRealUnusedFunction && !hasYFalsePositive && !hasHeightFalsePositive
+        
+        if (hasYFalsePositive) println "❌ Found false positive for TypeScript type 'y'"
+        if (hasHeightFalsePositive) println "❌ Found false positive for TypeScript type 'height'"
+        if (!hasRealUnusedFunction) println "❌ Real unused function not detected"
+        
+        recordTest("TypeScript Types", testPassed, testPassed ? "No false positives for TypeScript type properties" : "Still detecting type properties as functions")
     }
     
     def runAnalyzer(String filename, String args) {

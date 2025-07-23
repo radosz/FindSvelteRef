@@ -37,9 +37,6 @@ class SvelteAnalyzer implements Callable<Integer> {
     @Option(names = ["-f", "--format"], description = "Output format: text, json, csv (default: text)")
     String format = "text"
 
-    @Option(names = ["-r", "--recursive"], description = "Recursive directory analysis (default: true)")
-    boolean recursive = true
-
     @Option(names = ["-v", "--verbose"], description = "Verbose output")
     boolean verbose = false
 
@@ -821,26 +818,34 @@ class SvelteAnalyzer implements Callable<Integer> {
                 parseCSSProperties(block, propertyDeclarations)
             }
 
-            // Identify overrides
+            // Identify overrides - only within the same selector
             propertyDeclarations.each { property, declarations ->
                 if (declarations.size() > 1) {
-                    // Sort by line number to find override order
-                    declarations.sort { it.line }
+                    // Group declarations by selector
+                    Map<String, List> declarationsBySelector = declarations.groupBy { it.selector }
                     
-                    for (int i = 1; i < declarations.size(); i++) {
-                        def current = declarations[i]
-                        def previous = declarations[i-1]
-                        
-                        CSSOverride override = new CSSOverride()
-                        override.property = property
-                        override.line = current.line
-                        override.column = current.column
-                        override.selector = current.selector
-                        override.specificity = calculateSpecificity(current.selector)
-                        override.important = current.important
-                        override.conflictsWith = "Previous declaration at [${previous.line}:${previous.column}]"
-                        
-                        overrides.add(override)
+                    // Check for conflicts only within the same selector
+                    declarationsBySelector.each { selector, selectorDeclarations ->
+                        if (selectorDeclarations.size() > 1) {
+                            // Sort by line number to find override order
+                            selectorDeclarations.sort { it.line }
+                            
+                            for (int i = 1; i < selectorDeclarations.size(); i++) {
+                                def current = selectorDeclarations[i]
+                                def previous = selectorDeclarations[i-1]
+                                
+                                CSSOverride override = new CSSOverride()
+                                override.property = property
+                                override.line = current.line
+                                override.column = current.column
+                                override.selector = current.selector
+                                override.specificity = calculateSpecificity(current.selector)
+                                override.important = current.important
+                                override.conflictsWith = "Previous declaration at [${previous.line}:${previous.column}]"
+                                
+                                overrides.add(override)
+                            }
+                        }
                     }
                 }
             }
@@ -1168,6 +1173,17 @@ class SvelteAnalyzer implements Callable<Integer> {
                     if (arrowStart != -1 && arrowStart - colonPos < 20) {
                         String funcName = content.substring(nameStart, nameEnd)
                         
+                        // Filter out TypeScript type properties 
+                        // Check if this is a type definition (e.g., x: number, y: string)
+                        String afterColon = content.substring(colonPos + 1, Math.min(content.length(), colonPos + 15)).trim()
+                        Set<String> typeKeywords = ["number", "string", "boolean", "object", "any", "void", "null", "undefined"] as Set
+                        boolean isTypeDefinition = typeKeywords.any { keyword -> afterColon.startsWith(keyword) }
+                        
+                        if (isTypeDefinition) {
+                            searchStart = colonPos + 1
+                            continue
+                        }
+                        
                         // Skip if already found
                         if (functions.any { it.name == funcName }) {
                             searchStart = colonPos + 1
@@ -1218,6 +1234,31 @@ class SvelteAnalyzer implements Callable<Integer> {
                 
                 if (nameEnd > nameStart) {
                     String funcName = content.substring(nameStart, nameEnd)
+                    
+                    // Filter out JavaScript keywords and control structures
+                    Set<String> jsKeywords = ["if", "while", "for", "switch", "catch", "try", "with", "do"] as Set
+                    if (jsKeywords.contains(funcName)) {
+                        searchStart = bracePos + 1
+                        continue
+                    }
+                    
+                    // Filter out TypeScript type properties (e.g., { x: number; y: number })
+                    // Check if this is inside a type definition by looking backwards for ":"
+                    int beforeName = nameStart - 1
+                    while (beforeName >= 0 && Character.isWhitespace(content.charAt(beforeName))) {
+                        beforeName--
+                    }
+                    if (beforeName >= 0 && content.charAt(beforeName) == ':') {
+                        searchStart = bracePos + 1
+                        continue
+                    }
+                    
+                    // Also check if preceded by "{ " pattern (object type)
+                    String beforeContext = content.substring(Math.max(0, nameStart - 10), nameStart)
+                    if (beforeContext.contains("{") && beforeContext.contains(":")) {
+                        searchStart = bracePos + 1
+                        continue
+                    }
                     
                     // Skip if already found
                     if (functions.any { it.name == funcName }) {
@@ -2996,45 +3037,32 @@ class SvelteAnalyzer implements Callable<Integer> {
                 println "Walking directory: ${directory.absolutePath}"
             }
 
-        if (recursive) {
-            try {
-                Files.walk(directory.toPath())
-                    .forEach { path ->
-                        if (Files.isRegularFile(path)) {
-                            // Exclude files in excluded directories
-                            String pathStr = path.toString()
-                            boolean excluded = excludedDirs.any { excludedDir -> 
-                                pathStr.contains("/${excludedDir}/") || pathStr.contains("\\${excludedDir}\\") 
+        try {
+            Files.walk(directory.toPath())
+                .forEach { path ->
+                    if (Files.isRegularFile(path)) {
+                        // Exclude files in excluded directories
+                        String pathStr = path.toString()
+                        boolean excluded = excludedDirs.any { excludedDir -> 
+                            pathStr.contains("/${excludedDir}/") || pathStr.contains("\\${excludedDir}\\") 
+                        }
+                        
+                        if (!excluded) {
+                            String fileName = path.fileName.toString()
+                            boolean matches = extensionArray.any { ext -> 
+                                fileName.endsWith(ext.startsWith(".") ? ext : "." + ext)
                             }
                             
-                            if (!excluded) {
-                                String fileName = path.fileName.toString()
-                                boolean matches = extensionArray.any { ext -> 
-                                    fileName.endsWith(ext.startsWith(".") ? ext : "." + ext)
-                                }
-                                
-                                if (matches) {
-                                    files.add(path.toFile())
-                                }
+                            if (matches) {
+                                files.add(path.toFile())
                             }
                         }
                     }
-            } catch (Exception e) {
-                if (verbose) {
-                    println "Error during file walk: ${e.message}"
-                    e.printStackTrace()
                 }
-            }
-        } else {
-            directory.listFiles().each { file ->
-                if (file.isFile()) {
-                    String fileName = file.name
-                    if (extensionArray.any { ext -> 
-                        fileName.endsWith(ext.startsWith(".") ? ext : "." + ext)
-                    }) {
-                        files.add(file)
-                    }
-                }
+        } catch (Exception e) {
+            if (verbose) {
+                println "Error during file walk: ${e.message}"
+                e.printStackTrace()
             }
         }
 
