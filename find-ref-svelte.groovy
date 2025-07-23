@@ -2585,13 +2585,54 @@ class SvelteAnalyzer implements Callable<Integer> {
             
             StringBuilder output = new StringBuilder()
             output.append("🔧 REFACTORING REPORT: ${result.filePath}\n${'=' * 80}\n\n")
-            if (css) output.append(css).append("\n")
-            if (dead) output.append(dead).append("\n")
-            if (comp) output.append(comp).append("\n")
+            
+            if (css) {
+                // Remove the file path from CSS issues since we already have it in the header
+                String cleanCss = css.replace("🔍 CSS Issues in: ${result.filePath}\n\n", "🔍 CSS Issues:\n\n")
+                output.append(cleanCss).append("\n")
+            }
+            if (dead) {
+                // Remove the file path from dead code since we already have it in the header
+                String cleanDead = dead.replace("💀 Dead Code in: ${result.filePath}\n\n", "💀 Dead Code:\n\n")
+                output.append(cleanDead).append("\n")
+            }
+            if (comp) {
+                // Remove the file path from components since we already have it in the header
+                String cleanComp = comp.replace("🧩 Unused Components in: ${result.filePath}\n\n", "🧩 Unused Components:\n\n")
+                output.append(cleanComp).append("\n")
+            }
+            
+            // DOM and built-in method names that should not be flagged as unused
+            Set<String> domAndBuiltinMethods = [
+                // DOM methods
+                'contains', 'closest', 'querySelector', 'querySelectorAll', 'getElementById',
+                'getElementsByClassName', 'getElementsByTagName', 'addEventListener', 
+                'removeEventListener', 'appendChild', 'removeChild', 'insertBefore',
+                'cloneNode', 'setAttribute', 'getAttribute', 'removeAttribute',
+                'focus', 'blur', 'click', 'submit', 'reset',
+                
+                // String methods
+                'trim', 'startsWith', 'endsWith', 'includes', 'indexOf', 'lastIndexOf',
+                'substring', 'substr', 'slice', 'split', 'replace', 'replaceAll',
+                'toLowerCase', 'toUpperCase', 'charAt', 'charCodeAt',
+                
+                // Array methods
+                'push', 'pop', 'shift', 'unshift', 'splice', 'slice', 'concat',
+                'join', 'reverse', 'sort', 'filter', 'map', 'reduce', 'forEach',
+                'find', 'findIndex', 'some', 'every', 'includes',
+                
+                // Object methods
+                'keys', 'values', 'entries', 'hasOwnProperty', 'toString', 'valueOf',
+                
+                // Global functions
+                'isArray', 'parseInt', 'parseFloat', 'isNaN', 'isFinite',
+                'encodeURIComponent', 'decodeURIComponent', 'setTimeout', 'clearTimeout',
+                'setInterval', 'clearInterval'
+            ].toSet()
             
             int totalIssues = (result.cssSelectors?.count { it.htmlUsages.isEmpty() && !it.sourceBlock?.contains("Global") } ?: 0) +
                              (result.cssOverrides?.size() ?: 0) +
-                             (result.jsFunctions?.count { it.usages.isEmpty() && !it.isExported } ?: 0) +
+                             (result.jsFunctions?.count { it.usages.isEmpty() && !it.isExported && !domAndBuiltinMethods.contains(it.name) } ?: 0) +
                              (result.variables?.count { it.usages.isEmpty() && it.type != 'reactive' && !it.name.startsWith('$') } ?: 0) +
                              (result.componentImports?.count { !it.isUsed } ?: 0) +
                              (result.imports?.count { it.usages.isEmpty() } ?: 0)
