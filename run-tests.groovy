@@ -30,6 +30,7 @@ class SvelteAnalyzerTestSuite {
         testJavaScriptKeywordsFalsePositives()
         testCSSConflictsSameSelectorOnly()
         testRecursiveAnalysisAlwaysEnabled()
+        testDomMethodsFalsePositives()
         testTypeScriptTypeFalsePositives()
         
         // Print final results
@@ -189,6 +190,22 @@ class SvelteAnalyzerTestSuite {
         boolean testPassed = result.exitCode == 0 && result.output.contains("Found 2 files to analyze")
         
         recordTest("Recursive Analysis", testPassed, testPassed ? "Always enabled, no -r parameter needed" : "Recursive analysis not working")
+    }
+
+    void testDomMethodsFalsePositives() {
+        println "\n🔧 Testing DOM Methods False Positives..."
+        
+        def result = runAnalyzer("test-dom-methods-false-positive.svelte", "--filter-all-issues")
+        
+        // Should NOT detect DOM methods like contains() as unused functions
+        boolean hasContainsFalsePositive = result.output.contains("'contains()' declared") && result.output.contains("Never called")
+        
+        // Test passes if DOM method is NOT flagged as unused
+        boolean testPassed = !hasContainsFalsePositive
+        
+        if (hasContainsFalsePositive) println "❌ Found false positive for DOM method 'contains()'"
+        
+        recordTest("DOM Methods", testPassed, testPassed ? "No false positives for DOM methods like contains()" : "Still detecting DOM methods as unused functions")
     }
 
     void testTypeScriptTypeFalsePositives() {

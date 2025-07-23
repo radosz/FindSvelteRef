@@ -2511,7 +2511,37 @@ class SvelteAnalyzer implements Callable<Integer> {
             StringBuilder output = new StringBuilder()
             boolean hasIssues = false
             
-            def unusedFunctions = result.jsFunctions.findAll { func -> func.usages.isEmpty() && !func.isExported }
+            // DOM and built-in method names that should not be flagged as unused
+            Set<String> domAndBuiltinMethods = [
+                // DOM methods
+                'contains', 'closest', 'querySelector', 'querySelectorAll', 'getElementById',
+                'getElementsByClassName', 'getElementsByTagName', 'addEventListener', 
+                'removeEventListener', 'appendChild', 'removeChild', 'insertBefore',
+                'cloneNode', 'setAttribute', 'getAttribute', 'removeAttribute',
+                'focus', 'blur', 'click', 'submit', 'reset',
+                
+                // String methods
+                'trim', 'startsWith', 'endsWith', 'includes', 'indexOf', 'lastIndexOf',
+                'substring', 'substr', 'slice', 'split', 'replace', 'replaceAll',
+                'toLowerCase', 'toUpperCase', 'charAt', 'charCodeAt',
+                
+                // Array methods
+                'push', 'pop', 'shift', 'unshift', 'splice', 'slice', 'concat',
+                'join', 'reverse', 'sort', 'filter', 'map', 'reduce', 'forEach',
+                'find', 'findIndex', 'some', 'every', 'includes',
+                
+                // Object methods
+                'keys', 'values', 'entries', 'hasOwnProperty', 'toString', 'valueOf',
+                
+                // Global functions
+                'isArray', 'parseInt', 'parseFloat', 'isNaN', 'isFinite',
+                'encodeURIComponent', 'decodeURIComponent', 'setTimeout', 'clearTimeout',
+                'setInterval', 'clearInterval'
+            ].toSet()
+            
+            def unusedFunctions = result.jsFunctions.findAll { func -> 
+                func.usages.isEmpty() && !func.isExported && !domAndBuiltinMethods.contains(func.name)
+            }
             if (unusedFunctions) {
                 hasIssues = true
                 output.append("💀 Dead Code in: ${result.filePath}\n\n⚠️ Unused Functions:\n")
@@ -2745,6 +2775,34 @@ class SvelteAnalyzer implements Callable<Integer> {
     private int countRefactoringOpportunities(AnalysisResult result) {
         int opportunities = 0
         
+        // DOM and built-in method names that should not be flagged as unused
+        Set<String> domAndBuiltinMethods = [
+            // DOM methods
+            'contains', 'closest', 'querySelector', 'querySelectorAll', 'getElementById',
+            'getElementsByClassName', 'getElementsByTagName', 'addEventListener', 
+            'removeEventListener', 'appendChild', 'removeChild', 'insertBefore',
+            'cloneNode', 'setAttribute', 'getAttribute', 'removeAttribute',
+            'focus', 'blur', 'click', 'submit', 'reset',
+            
+            // String methods
+            'trim', 'startsWith', 'endsWith', 'includes', 'indexOf', 'lastIndexOf',
+            'substring', 'substr', 'slice', 'split', 'replace', 'replaceAll',
+            'toLowerCase', 'toUpperCase', 'charAt', 'charCodeAt',
+            
+            // Array methods
+            'push', 'pop', 'shift', 'unshift', 'splice', 'slice', 'concat',
+            'join', 'reverse', 'sort', 'filter', 'map', 'reduce', 'forEach',
+            'find', 'findIndex', 'some', 'every', 'includes',
+            
+            // Object methods
+            'keys', 'values', 'entries', 'hasOwnProperty', 'toString', 'valueOf',
+            
+            // Global functions
+            'isArray', 'parseInt', 'parseFloat', 'isNaN', 'isFinite',
+            'encodeURIComponent', 'decodeURIComponent', 'setTimeout', 'clearTimeout',
+            'setInterval', 'clearInterval'
+        ].toSet()
+        
         // Count unused CSS selectors (excluding global styles)
         opportunities += result.cssSelectors?.count { selector ->
             (!selector.htmlUsages || selector.htmlUsages.isEmpty()) && 
@@ -2754,9 +2812,9 @@ class SvelteAnalyzer implements Callable<Integer> {
         // Count CSS property conflicts
         opportunities += result.cssOverrides?.size() ?: 0
         
-        // Count unused JavaScript functions (excluding exported ones)
+        // Count unused JavaScript functions (excluding exported ones and DOM/built-in methods)
         opportunities += result.jsFunctions?.count { func -> 
-            func.usages.isEmpty() && !func.isExported 
+            func.usages.isEmpty() && !func.isExported && !domAndBuiltinMethods.contains(func.name)
         } ?: 0
         
         // Count unused variables (excluding reactive and store variables)
