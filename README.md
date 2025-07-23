@@ -22,6 +22,7 @@ A comprehensive Svelte/SvelteKit file analyzer and refactoring tool that provide
 - **Git Integration**: Analyze specific commits and compare changes between commits
 - **Multiple Output Formats**: Text, JSON, and CSV output support
 - **Focused Filtering**: Target specific types of issues for focused refactoring
+- **Smart Output Filtering**: Automatically shows output only when refactoring opportunities are found (> 0)
 
 ### Refactoring Support
 - **Actionable Recommendations**: Get specific suggestions for code cleanup
@@ -56,7 +57,7 @@ sudo ln -s $(pwd)/find-ref-svelte.groovy /usr/local/bin/find-ref-svelte
 
 ### Basic Analysis
 ```bash
-# Analyze a SvelteKit project
+# Analyze a SvelteKit project (shows output only when issues found)
 find-ref-svelte ./my-svelte-project
 
 # Analyze with verbose output
@@ -64,6 +65,9 @@ find-ref-svelte -v ./my-svelte-project
 
 # Analyze specific file
 find-ref-svelte ./src/routes/+page.svelte
+
+# Note: The tool automatically filters output - only files with refactoring 
+# opportunities (> 0) will be displayed. Clean files produce no output.
 ```
 
 ### Focused Refactoring Analysis
@@ -203,6 +207,33 @@ Estimated cleanup impact: ~15% reduction in bundle size
 | `--git-working-dir` | Git repository directory | current |
 | `-h, --help` | Show help message | - |
 | `-V, --version` | Show version | - |
+
+## 🎯 Smart Filtering
+
+The tool includes intelligent output filtering that automatically shows results only when refactoring opportunities are found:
+
+### Automatic Filtering Behavior
+- **Clean Files**: Files with no issues produce no output (silent success)
+- **Files with Issues**: Only files containing refactoring opportunities are displayed
+- **Comprehensive Counting**: Counts unused CSS selectors, CSS conflicts, unused functions, unused variables, unused components, and unused imports
+
+### Example Behavior
+```bash
+# Clean project - no output
+$ find-ref-svelte ./clean-project
+# (no output - all files are clean)
+
+# Project with issues - shows only problematic files
+$ find-ref-svelte ./project-with-issues
+Title: /project/src/components/Header.svelte
+# ... analysis of problematic file only
+```
+
+### Benefits
+- **Noise Reduction**: Focus only on files that need attention
+- **Efficient Workflow**: No need to scroll through clean file reports
+- **CI/CD Friendly**: Zero output means zero issues found
+- **Performance**: Faster analysis when most files are clean
 
 ## 🎯 Use Cases
 

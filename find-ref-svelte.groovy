@@ -2739,6 +2739,39 @@ class SvelteAnalyzer implements Callable<Integer> {
         }
     }
 
+    private int countRefactoringOpportunities(AnalysisResult result) {
+        int opportunities = 0
+        
+        // Count unused CSS selectors (excluding global styles)
+        opportunities += result.cssSelectors?.count { selector ->
+            (!selector.htmlUsages || selector.htmlUsages.isEmpty()) && 
+            !selector.sourceBlock?.contains("Global")
+        } ?: 0
+        
+        // Count CSS property conflicts
+        opportunities += result.cssOverrides?.size() ?: 0
+        
+        // Count unused JavaScript functions (excluding exported ones)
+        opportunities += result.jsFunctions?.count { func -> 
+            func.usages.isEmpty() && !func.isExported 
+        } ?: 0
+        
+        // Count unused variables (excluding reactive and store variables)
+        opportunities += result.variables?.count { variable -> 
+            variable.usages.isEmpty() && variable.type != 'reactive' && !variable.name.startsWith('$')
+        } ?: 0
+        
+        // Count unused component imports
+        opportunities += result.componentImports?.count { !it.isUsed } ?: 0
+        
+        // Count unused regular imports
+        opportunities += result.imports?.count { importStmt ->
+            importStmt.usages.isEmpty()
+        } ?: 0
+        
+        return opportunities
+    }
+
     @Override
     Integer call() throws Exception {
         try {
@@ -2803,7 +2836,13 @@ class SvelteAnalyzer implements Callable<Integer> {
                     } else if (filterAllIssues) {
                         formattedResult = formatter.formatAllIssues(result, format)
                     } else {
-                        formattedResult = formatter.formatAnalysisResult(result, format)
+                        // Check if there are any refactoring opportunities before showing full analysis
+                        int refactoringOpportunities = countRefactoringOpportunities(result)
+                        if (refactoringOpportunities > 0) {
+                            formattedResult = formatter.formatAnalysisResult(result, format)
+                        } else {
+                            formattedResult = "" // No output if no refactoring opportunities
+                        }
                     }
                     
                     if (formattedResult && !formattedResult.trim().isEmpty()) {
